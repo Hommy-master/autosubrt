@@ -24,7 +24,7 @@ EXPOSE 60000
 # 设置环境变量，指定uv缓存目录和用户主目录
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH" \
+    PATH="/app/.venv/bin:/app/bin:$PATH" \
     HOME="/root" \
     UV_CACHE_DIR="/root/.cache/uv"
 

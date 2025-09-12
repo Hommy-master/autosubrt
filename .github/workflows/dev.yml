@@ -28,9 +28,12 @@ jobs:
 
       - name: 准备生产环境文件
         run: |
-          mkdir -p dist
+          mkdir -p dist/bin
           # 复制源代码
           cp *.py dist/
+          # 复制工具
+          cp tools/ffmpeg dist/bin/ffmpeg
+          chmod +x dist/bin/ffmpeg
           # 复制依赖配置文件
           cp pyproject.toml dist/          
           cp uv.lock dist/
