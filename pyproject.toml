@@ -1,0 +1,15 @@
+[project]
+name = "test"
+version = "1.0.0"
+description = "test"
+authors = [
+    { name = "Hommy", email = "taohongmin51@gmail.com" }
+]
+requires-python = ">=3.11"
+
+dependencies = [
+    "funasr>=1.2.7",
+    "pysrt>=1.1.2",
+    "torch>=2.8.0",
+    "torchaudio>=2.8.0",
+]
