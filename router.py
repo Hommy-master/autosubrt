@@ -44,7 +44,7 @@ def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):
     return schemas.AsrEmbedResponse(embed_url=embed_url)
 
 # 健康检查端点
-@app.get("/health", summary="健康检查")
+@router.get("/health", summary="健康检查")
 def health_check():
     """检查服务是否正常运行"""
-    return {"code": 0, "message": "服务运行正常"}
+    return {"code": 0, "message": "AutoSubRT Service is running"}
