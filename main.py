@@ -66,7 +66,7 @@ def split_text_by_timestamp(text, timestamps):
 if __name__ == "__main__":
     # 语音识别
     model = AutoModel(model="paraformer-zh", disable_update=True)
-    result = model.generate(input="C:\\workspace\\code\\test\\dea828e6-94f7-44e2-a341-3790ddf0f57a.MP3")
+    result = model.generate(input="./dea828e6-94f7-44e2-a341-3790ddf0f57a.MP3")
     
     # 转换为SRT
     subs = pysrt.SubRipFile()
