@@ -9,8 +9,6 @@ services:
       - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/output:/app/output  # 挂载配置文件目录
       - /etc/localtime:/etc/localtime:ro  # 挂载主机时区
       - /etc/timezone:/etc/timezone:ro    # 挂载时区名称（可选）
-    extra_hosts: # 用于容器内访问主机的服务
-      - "host.docker.internal:10.0.16.6"
     environment:
       # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
       - DOWNLOAD_URL=https://autosubrt.jcaigc.cn/
