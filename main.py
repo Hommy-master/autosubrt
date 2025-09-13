@@ -11,14 +11,14 @@ async def lifespan(app: FastAPI):
     # ---------------- 启动 ----------------
     # await create_db_pool()
     # await start_redis()
-    print("✅ app start\n")
+    logger.info("✅ app start")
     # 在应用启动时加载模型
     service.load_model()
     yield
     # ---------------- 关闭 ----------------
     # await close_db_pool()
     # await stop_redis()
-    print("❌ app shutdown\n")
+    logger.info("❌ app shutdown")
 
 # 2. 创建FastAPI应用
 app = FastAPI(title="AutoSubRT API", description="语音转SRT字幕服务", lifespan=lifespan)

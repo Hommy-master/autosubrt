@@ -1,5 +1,5 @@
-from logging.config import dictConfig
 import logging
+from logging.config import dictConfig
 import os
 
 class RelativePathFormatter(logging.Formatter):
@@ -29,11 +29,15 @@ LOGGING_CONFIG = {
             "stream": "ext://sys.stdout",
         },
     },
+    "root": {
+        "handlers": ["default"],
+        "level": "INFO"
+    },
     "loggers": {
         "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
-        "uvicorn.error": {"level": "DEBUG"},
+        "uvicorn.error": {"level": "INFO"},
         "uvicorn.access": {"handlers": ["default"], "level": "INFO", "propagate": False},
-        "src.utils.logger": {"handlers": ["default"], "level": "INFO", "propagate": False}
+        "autosubrt": {"handlers": ["default"], "level": "INFO", "propagate": False}
     },
 }
 
