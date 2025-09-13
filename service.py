@@ -1,10 +1,10 @@
 from funasr import AutoModel
 from logger import logger
-from pydantic import BaseModel
 import traceback
 import helper
 import pysrt
 import config
+import os
 
 
 # 加载模型（只加载一次）
@@ -42,6 +42,9 @@ def asr_srt(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
+    # 0. 创建目录
+    os.makedirs(config.TEMP_DIR, exist_ok=True)
+
     # 1. 下载音频文件
     audio_file = helper.download(audio_url, config.TEMP_DIR, helper.gen_unique_id())
     logger.info(f"audio_url: {audio_url}, audio_file: {audio_file}")
@@ -50,7 +53,7 @@ def asr_srt(audio_url: str) -> str:
     res = model.generate(audio_file)
     logger.info(f"res: {res}")
 
-    return ""
+    return f"res: {res}"
 
 def asr_embed(video_url: str) -> str:
     """

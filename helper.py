@@ -3,6 +3,7 @@ import requests
 import mimetypes
 import datetime
 import uuid
+from logger import logger
 
 
 def download(url, save_dir, filename, limit=128*1024*1024, timeout=180) -> str:

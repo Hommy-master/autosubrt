@@ -38,10 +38,10 @@ def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):
 
     # 调用service层处理业务逻辑
     embed_url = service.asr_embed(
-        video_url=asr.video_url
+        video_url=asr.video_url,
     )
 
-    return schemas.AsrEmbedResponse(embed_url=embed_url)
+    return schemas.AsrEmbedResponse(video_url=embed_url)
 
 # 健康检查端点
 @router.get("/health", summary="健康检查")
