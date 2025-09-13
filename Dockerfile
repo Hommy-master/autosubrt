@@ -16,7 +16,7 @@ RUN mkdir -p /root/.cache/uv
 COPY dist/ .
 
 # 安装依赖（仍使用root用户确保权限）
-RUN uv sync
+# RUN uv sync
 
 # 暴露应用端口
 EXPOSE 60000
