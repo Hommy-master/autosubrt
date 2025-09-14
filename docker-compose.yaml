@@ -5,7 +5,6 @@ services:
     ports:
       - "60001:60000"  # 将主机的 60000 端口映射到容器内部的 60000 端口
     volumes:
-      - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/model_cache:/app/model_cache  # 持久化模型缓存
       - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/output:/app/output  # 挂载配置文件目录
       - /etc/localtime:/etc/localtime:ro  # 挂载主机时区
       - /etc/timezone:/etc/timezone:ro    # 挂载时区名称（可选）
