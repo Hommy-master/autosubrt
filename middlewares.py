@@ -73,26 +73,16 @@ class ResponseMiddleware(BaseHTTPMiddleware):
                         field = ".".join(str(part) for part in error["loc"] if part != "body")
                         message = f"{field}: {error['msg']}"
                         validation_messages.append(message)
-            
+
             # 构建统一的422错误响应（不包含data字段）
-            error_message = "; ".join(validation_messages) if validation_messages else (
-                "参数验证失败" if lang == "zh" else "Parameter validation failed"
-            )
-            
-            error_response = {
-                "code": 422,
-                "message": error_message
-            }
-            
+            error_message = "; ".join(validation_messages) if validation_messages else ""
+            error_response = CustomError.PARAM_VALIDATION_FAILED.as_dict(detail=error_message, lang=lang)
             return JSONResponse(status_code=200, content=error_response)
             
         except json.JSONDecodeError:
-            # 如果无法解析JSON，回退到通用错误处理
-            error_response = {
-                "code": 422,
-                "message": "参数验证失败" if lang == "zh" else "Parameter validation failed"
-            }
+            logger.warning(f"Failed to parse 422 response body: {body_str}")
             
+            error_response = CustomError.PARAM_VALIDATION_FAILED.as_dict(detail=body_str, lang=lang)
             return JSONResponse(status_code=200, content=error_response)
 
     async def _handle_non_200_response(self, response, lang: str) -> JSONResponse:
@@ -140,7 +130,7 @@ class ResponseMiddleware(BaseHTTPMiddleware):
             # 创建统一格式的响应（成功响应保留data字段）
             unified_response = {
                 'code': CustomError.SUCCESS.code,
-                'message': CustomError.SUCCESS.as_dict(language=lang)['message'],
+                'message': CustomError.SUCCESS.as_dict(lang=lang)['message'],
                 'data': data
             }
             
@@ -159,7 +149,7 @@ class ResponseMiddleware(BaseHTTPMiddleware):
                     (f" ({e.detail})" if e.detail else ""))
         
         # 获取错误信息
-        error_response = e.err.as_dict(detail=e.detail, language=lang)
+        error_response = e.err.as_dict(detail=e.detail, lang=lang)
         return JSONResponse(status_code=200, content=error_response)
 
     def _handle_generic_exception(self, e: Exception, lang: str) -> JSONResponse:
@@ -167,5 +157,5 @@ class ResponseMiddleware(BaseHTTPMiddleware):
         logger.warning(f"Internal server error: {str(e)}")
         
         # 获取错误信息
-        error_response = CustomError.INTERNAL_SERVER_ERROR.as_dict(detail=str(e), language=lang)
+        error_response = CustomError.INTERNAL_SERVER_ERROR.as_dict(detail=str(e), lang=lang)
         return JSONResponse(status_code=200, content=error_response)
