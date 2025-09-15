@@ -9,7 +9,9 @@ class CustomError(Enum):
     PARAM_VALIDATION_FAILED = (1001, "参数校验失败", "Parameter validation failed")
     
     # ===== 业务错误码 (2000-2999) =====
-    INVALID_DRAFT_URL = (2001, "无效的草稿URL", "Invalid draft URL")
+    RECOGNIZE_AUDIO_FAILED = (2001, "识别音频失败", "Failed to recognize audio")
+    FILE_SIZE_LIMIT_EXCEEDED = (2002, "文件大小超出限制", "File size exceeds the limit")
+    DOWNLOAD_FILE_FAILED = (2003, "下载文件失败", "Download file failed")
 
     # ===== 系统错误码 (9000-9999) =====
     INTERNAL_SERVER_ERROR = (9998, "系统内部错误", "Internal server error")

@@ -1,5 +1,6 @@
 from funasr import AutoModel
 from logger import logger
+from exceptions import CustomException, CustomError
 import traceback
 import helper
 import pysrt
@@ -42,18 +43,19 @@ def asr_srt(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
-    # 0. 创建目录
-    os.makedirs(config.TEMP_DIR, exist_ok=True)
-
     # 1. 下载音频文件
-    audio_file = helper.download(audio_url, config.TEMP_DIR, helper.gen_unique_id())
-    logger.info(f"audio_url: {audio_url}, audio_file: {audio_file}")
+    audio_file = helper.download(audio_url, config.TEMP_DIR)
+    logger.info(f"Download audio file success, audio_url: {audio_url}, audio_file: {audio_file}")
 
-    # 2. 识别音频文件
-    res = model.generate(audio_file)
-    logger.info(f"res: {res}")
+    # 2. 生成srt文件名
+    srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
 
-    return f"res: {res}"
+    # 3. 执行音频转srt格式文件
+    process_audio_to_srt(audio_file, srt_file)
+    logger.info(f"Process audio to srt success, srt_file: {srt_file}")
+
+    # 4. 生成下载路径
+    return gen_download_url(srt_file)
 
 def asr_embed(video_url: str) -> str:
     """
@@ -161,8 +163,6 @@ def split_text_by_timestamp(text, timestamps):
 def process_audio_to_srt(audio_path: str, srt_path: str):
     """处理音频文件并生成SRT字幕"""
     try:
-        logger.info(f"Begin to handle audio file: {audio_path}")
-        
         # 1. 使用模型生成识别结果
         result = model.generate(input=audio_path)
         
@@ -195,6 +195,5 @@ def process_audio_to_srt(audio_path: str, srt_path: str):
         subs.save(srt_path)
         logger.info(f"SRT file saved: {srt_path}")
     except Exception as e:
-        logger.error(f"处理音频文件失败: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise CustomException(status_code=500, detail=f"处理音频文件失败: {str(e)}")
+        logger.error(f"Handle audio file failed: {str(e)}, detail: {traceback.format_exc()}")
+        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)

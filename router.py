@@ -30,8 +30,7 @@ def asr_srt(asr: schemas.AsrSrtRequest):
     )
 
     logger.info(f"generate srt: {srt_url}")
-
-    return schemas.AsrSrtResponse(srt_url="https://example.com/srt")
+    return schemas.AsrSrtResponse(srt_url=srt_url)
 
 @router.post("/asr/embed", response_model=schemas.AsrEmbedResponse)
 def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):
