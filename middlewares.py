@@ -35,77 +35,142 @@ class ResponseMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         try:
-            # 获取语言偏好（默认中文）
-            lang = request.headers.get('Accept-Language', 'zh').split(',')[0].split('-')[0]
-            if lang not in ['zh', 'en']:
-                lang = 'zh'
-            
-            # 调用下一个处理函数
+            lang = self._get_language_from_request(request)
             response = await call_next(request)
 
-            # 检查状态码是否为200
+            # 处理非200状态码的响应
             if response.status_code != 200:
-                # 读取响应内容
-                body = b""
-                async for chunk in response.body_iterator:
-                    body += chunk
+                return await self._handle_non_200_response(response, lang)
                 
-                # 将响应内容转换为字符串
-                body_str = body.decode()
+            # 处理JSON响应
+            if self._is_json_response(response):
+                return await self._process_json_response(response, lang)
                 
-                # 创建统一的错误响应格式
-                error_response = {
-                    "code": response.status_code,
-                    "message": f"HTTP Error {response.status_code}",
-                    "data": {
-                        "detail": body_str
-                    }
-                }
-                
-                return JSONResponse(
-                    status_code=200,  # 统一返回200状态码，将实际状态码放在响应体中
-                    content=error_response
-                )
-                
-            # 检查是否为JSON响应
-            if response.headers.get('content-type') == 'application/json':
-                # 读取响应内容
-                body = [section async for section in response.body_iterator]
-                if body:
-                    body_str = b''.join(body).decode()
-                    try:
-                        # 解析JSON响应
-                        data = json.loads(body_str)
-                        
-                        # 检查响应是否已经包含code和message
-                        if 'code' not in data or 'message' not in data:
-                            # 包装成统一响应格式（平铺业务数据）
-                            unified_response = {
-                                'code': CustomError.SUCCESS.code,
-                                'message': CustomError.SUCCESS.as_dict(language=lang)['message'],
-                                'data': data
-                            }
-                            
-                            # 创建新的JSON响应
-                            return JSONResponse(
-                                status_code=response.status_code,
-                                content=unified_response
-                            )
-                    except json.JSONDecodeError:
-                        logger.warning(f"JSON decode error: {body_str}")
-                    
-                return response
+            return response
+            
         except CustomException as e:
-            # 处理自定义业务异常
-            logger.error(f"Custom exception: {e.err.code} - {e.err.cn_message}" + (f" ({e.detail})" if e.detail else ""))
-            return JSONResponse(
-                status_code=200,
-                content=e.err.as_dict(e.detail, language=lang)
-            )
+            return self._handle_custom_exception(e, lang)
         except Exception as e:
-            # 处理其他未捕获的异常
-            logger.error(f"Internal server error: {str(e)}")
+            return self._handle_generic_exception(e, lang)
+
+    def _get_language_from_request(self, request: Request) -> str:
+        """从请求头获取语言偏好"""
+        lang = request.headers.get('Accept-Language', 'zh').split(',')[0].split('-')[0]
+        return lang if lang in ['zh', 'en'] else 'zh'
+    
+    def _handle_422_error(self, body_str: str, lang: str) -> JSONResponse:
+        """特殊处理422参数验证错误"""
+        try:
+            # 尝试解析422错误的响应体
+            error_data = json.loads(body_str)
+            
+            # 提取验证错误的详细信息
+            validation_errors = []
+            if "detail" in error_data:
+                for error in error_data["detail"]:
+                    if "loc" in error and "msg" in error:
+                        # 格式化错误信息
+                        field = ".".join(str(part) for part in error["loc"] if part != "body")
+                        validation_errors.append({
+                            "field": field,
+                            "message": error["msg"]
+                        })
+            
+            # 构建统一的422错误响应
+            error_response = {
+                "code": 422,
+                "message": "参数验证失败" if lang == "zh" else "Parameter validation failed",
+                "data": {
+                    "validation_errors": validation_errors,
+                    "detail": error_data.get("detail", [])
+                }
+            }
+            
+            return JSONResponse(status_code=200, content=error_response)
+            
+        except json.JSONDecodeError:
+            # 如果无法解析JSON，回退到通用错误处理
+            error_response = {
+                "code": 422,
+                "message": "参数验证失败" if lang == "zh" else "Parameter validation failed",
+                "data": {"detail": body_str}
+            }
+            
+            return JSONResponse(status_code=200, content=error_response)
+
+    async def _handle_non_200_response(self, response, lang: str) -> JSONResponse:
+        """处理非200状态码的响应"""
+        logger.info(f"Non-200 response: {response.status_code}")
+
+        body = b""
+        async for chunk in response.body_iterator:
+            body += chunk
+        
+        body_str = body.decode()
+
+        logger.info(f"Non-200 response: {response.status_code} - {body_str}")
+        
+        # 特殊处理422错误（参数验证错误）
+        if response.status_code == 422:
+            return self._handle_422_error(body_str, lang)
+        
+        # 其他非200错误处理
+        error_response = {
+            "code": response.status_code,
+            "message": f"HTTP Error {response.status_code}",
+            "data": {"detail": body_str}
+        }
+        
+        return JSONResponse(status_code=200, content=error_response)
+
+    def _is_json_response(self, response) -> bool:
+        """检查是否为JSON响应"""
+        return response.headers.get('content-type') == 'application/json'
+
+    async def _process_json_response(self, response, lang: str):
+        """处理JSON响应并统一格式"""
+        body = [section async for section in response.body_iterator]
+        if not body:
+            return response
+            
+        body_str = b''.join(body).decode()
+        
+        try:
+            data = json.loads(body_str)
+            
+            # 如果响应已经有统一格式，直接返回
+            if 'code' in data and 'message' in data:
+                return response
+                
+            # 创建统一格式的响应
+            unified_response = {
+                'code': CustomError.SUCCESS.code,
+                'message': CustomError.SUCCESS.as_dict(language=lang)['message'],
+                'data': data
+            }
+            
             return JSONResponse(
-                status_code=200,
-                content=CustomError.INTERNAL_SERVER_ERROR.as_dict(str(e), language=lang)
+                status_code=response.status_code,
+                content=unified_response
             )
+            
+        except json.JSONDecodeError:
+            logger.warning(f"JSON decode error: {body_str}")
+            return response
+
+    def _handle_custom_exception(self, e: CustomException, lang: str) -> JSONResponse:
+        """处理自定义异常"""
+        logger.warning(f"Custom exception: {e.err.code} - {e.err.cn_message}" + 
+                    (f" ({e.detail})" if e.detail else ""))
+        return JSONResponse(
+            status_code=200,
+            content=e.err.as_dict(detail=e.detail, language=lang)
+        )
+
+    def _handle_generic_exception(self, e: Exception, lang: str) -> JSONResponse:
+        """处理通用异常"""
+        logger.warning(f"Internal server error: {str(e)}")
+        return JSONResponse(
+            status_code=200,
+            content=CustomError.INTERNAL_SERVER_ERROR.as_dict(detail=str(e), language=lang)
+        )
