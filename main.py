@@ -3,11 +3,8 @@ from contextlib import asynccontextmanager
 import router
 import service
 import middlewares
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
-from fastapi import status, Request
 from logger import logger
-from exceptions import CustomError
+
 
 # 1. 加载模型
 @asynccontextmanager
@@ -31,9 +28,9 @@ app = FastAPI(title="AutoSubRT API", description="语音转SRT字幕服务", lif
 app.include_router(router.router, prefix="/openapi", tags=["AutoSubRT"])
 
 # 4. 添加中间件
-app.middleware("http")(middlewares.prepare_middleware)
+app.add_middleware(middlewares.PrepareMiddleware)
 # 注册统一响应处理中间件（注意顺序，应该在其他中间件之后注册）
-app.middleware("http")(middlewares.response_middleware)
+app.add_middleware(middlewares.ResponseMiddleware)
 
 # 5. 打印所有路由
 for r in app.routes:
@@ -47,9 +44,6 @@ for r in app.routes:
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # 运行FastAPI应用 - 移除workers参数以便直接通过脚本运行
-    # 在生产环境中，建议使用命令：uvicorn main:app --host 0.0.0.0 --port 60000 --workers 4
     logger.info("Start AutoSubRT Service ...")
     uvicorn.run(app, host="0.0.0.0", port=60000, lifespan="on")
     logger.info("AutoSubRT Service stopped")
