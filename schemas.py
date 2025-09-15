@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class AsrTextRequest(BaseModel):
@@ -11,7 +11,7 @@ class AsrTextResponse(BaseModel):
 
 class AsrSrtRequest(BaseModel):
     """语音 -> 字幕请求参数"""
-    audio_url: str = Field(default="", description="音频文件URL")
+    audio_url: HttpUrl = Field(..., description="音频文件URL")
 
 class AsrSrtResponse(BaseModel):
     """语音 -> 字幕响应参数"""

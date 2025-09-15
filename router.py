@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Request
+from logger import logger
 import schemas
 import service
 
@@ -19,7 +20,7 @@ def asr_text(request: Request, asr: schemas.AsrTextRequest):
     return schemas.AsrTextResponse(text=text)
 
 @router.post("/asr/srt", response_model=schemas.AsrSrtResponse)
-def asr_srt(request: Request, asr: schemas.AsrSrtRequest):
+def asr_srt(asr: schemas.AsrSrtRequest):
     """
     语音 -> 字幕
     """
@@ -28,7 +29,9 @@ def asr_srt(request: Request, asr: schemas.AsrSrtRequest):
         audio_url=asr.audio_url,
     )
 
-    return schemas.AsrSrtResponse(srt_url=srt_url)
+    logger.info(f"generate srt: {srt_url}")
+
+    return schemas.AsrSrtResponse(srt_url="https://example.com/srt")
 
 @router.post("/asr/embed", response_model=schemas.AsrEmbedResponse)
 def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):

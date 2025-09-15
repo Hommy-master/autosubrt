@@ -7,8 +7,12 @@ import os
 import config
 
 
-# 请求前的准备工作，如：创建草稿目录
 async def prepare_middleware(request: Request, call_next):
+    """请求前的准备工作中间件
+    功能：
+    1. 创建临时目录
+    2. 创建输出目录
+    """
     # 递归创建目录，如果目录存在，就直接跳过创建
     os.makedirs(config.TEMP_DIR, exist_ok=True)
     os.makedirs(config.VIDEO_OUTPUT_DIR, exist_ok=True)
@@ -32,6 +36,30 @@ async def response_middleware(request: Request, call_next):
         
         # 调用下一个处理函数
         response = await call_next(request)
+
+        # 检查状态码是否为200
+        if response.status_code != 200:
+            # 读取响应内容
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+            
+            # 将响应内容转换为字符串
+            body_str = body.decode()
+            
+            # 创建统一的错误响应格式
+            error_response = {
+                "code": response.status_code,
+                "message": f"HTTP Error {response.status_code}",
+                "data": {
+                    "detail": body_str
+                }
+            }
+            
+            return JSONResponse(
+                status_code=200,  # 统一返回200状态码，将实际状态码放在响应体中
+                content=error_response
+            )
         
         # 检查是否为JSON响应
         if response.headers.get('content-type') == 'application/json':
@@ -49,7 +77,7 @@ async def response_middleware(request: Request, call_next):
                         unified_response = {
                             'code': CustomError.SUCCESS.code,
                             'message': CustomError.SUCCESS.as_dict(language=lang)['message'],
-                            **data
+                            'data': data
                         }
                         
                         # 创建新的JSON响应
@@ -61,7 +89,6 @@ async def response_middleware(request: Request, call_next):
                     logger.warning(f"JSON decode error: {body_str}")
             
         return response
-        
     except CustomException as e:
         # 处理自定义业务异常
         logger.error(f"Custom exception: {e.err.code} - {e.err.cn_message}" + (f" ({e.detail})" if e.detail else ""))

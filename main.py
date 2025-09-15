@@ -26,35 +26,16 @@ async def lifespan(app: FastAPI):
 
 # 2. 创建FastAPI应用
 app = FastAPI(title="AutoSubRT API", description="语音转SRT字幕服务", lifespan=lifespan)
+
 # 3. 注册路由
-app.include_router(router.router, prefix="/openapi", tags=["autosubrt"])
+app.include_router(router.router, prefix="/openapi", tags=["AutoSubRT"])
 
 # 4. 添加中间件
 app.middleware("http")(middlewares.prepare_middleware)
 # 注册统一响应处理中间件（注意顺序，应该在其他中间件之后注册）
 app.middleware("http")(middlewares.response_middleware)
 
-# 5. 异常处理：参数校验错误
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-    """自定义参数校验错误处理器"""
-    # 1. 拼接完整错误信息
-    error_messages = []
-    for error in exc.errors():
-        field = ".".join(str(loc) for loc in error["loc"])
-        error_type = error["type"]
-        error_msg = error["msg"]
-        # 组合字段+错误类型+详情信息
-        error_messages.append(f"{field} ({error_type}): {error_msg}")
-    
-    # 2. 构建统一响应结构
-    full_message = "; ".join(error_messages)  # 用分号分隔多个错误
-    return JSONResponse(
-        status_code=status.HTTP_200_OK,
-        content=CustomError.PARAM_VALIDATION_FAILED.as_dict(full_message)
-    )
-
-# 6. 打印所有路由
+# 5. 打印所有路由
 for r in app.routes:
     # 1. 取 HTTP 方法列表
     methods = getattr(r, "methods", None) or [getattr(r, "method", "WS")]
