@@ -26,13 +26,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: 预下载模型
-        run: |
-          uv run python -c "from funasr import AutoModel; AutoModel(model='paraformer-zh', disable_update=True)"
-          # 复制模型缓存到dist目录，以便Docker构建时使用
-          mkdir -p dist/model_cache
-          cp -r ~/.cache/modelscope dist/model_cache/
-
       - name: 准备生产环境文件
         run: |
           mkdir -p dist/bin

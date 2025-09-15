@@ -21,10 +21,6 @@ RUN uv sync
 # 在安装依赖后添加预下载模型步骤
 RUN uv run python -c "from funasr import AutoModel; AutoModel(model='paraformer-zh', disable_update=True)"
 
-# 可选：创建持久化的模型缓存目录并设置环境变量
-RUN mkdir -p /app/model_cache
-ENV MODELSCOPE_CACHE=/app/model_cache
-
 # 暴露应用端口
 EXPOSE 60000
 
