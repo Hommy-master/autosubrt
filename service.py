@@ -131,7 +131,7 @@ def split_text_by_timestamp(text, timestamps):
         interval = curr_start - prev_end
         
         # 如果间隔超过1秒，认为是一个句子结束
-        if interval > 1000 and i > sentence_start_idx:
+        if interval > 250 and i > sentence_start_idx:
             # 创建一个句子
             start_ms = valid_timestamps[sentence_start_idx][0]
             end_ms = valid_timestamps[i-1][1]

@@ -19,7 +19,7 @@ COPY dist/ .
 RUN uv sync
 
 # 在安装依赖后添加预下载模型步骤
-RUN uv run python -c "from funasr import AutoModel; AutoModel(model='paraformer-zh', disable_update=True)"
+# RUN uv run python -c "from funasr import AutoModel; AutoModel(model='paraformer-zh', disable_update=True)"
 
 # 暴露应用端口
 EXPOSE 60000
