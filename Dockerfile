@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 
-# 使用pip安装uv
-RUN pip install --no-cache-dir uv
+# 使用官方推荐方式安装 uv
+ADD https://astral.sh/uv/install.sh /install.sh
+RUN chmod +x /install.sh && /install.sh && rm /install.sh
 
 # 验证uv安装
 RUN uv --version
@@ -16,10 +17,7 @@ RUN mkdir -p /root/.cache/uv
 COPY dist/ .
 
 # 安装依赖（仍使用root用户确保权限）
-RUN uv sync
-
-# 在安装依赖后添加预下载模型步骤
-# RUN uv run python -c "from funasr import AutoModel; AutoModel(model='paraformer-zh', disable_update=True)"
+RUN uv sync --no-dev --no-cache && uv cache prune
 
 # 暴露应用端口
 EXPOSE 60000
