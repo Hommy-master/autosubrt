@@ -70,6 +70,7 @@ def download(url, save_dir, limit=30*1024*1024, timeout=180) -> str:
             logger.warning(f"Download failed, url: {url}, error: File download incomplete: expected {content_length} bytes, actual {os.path.getsize(save_path)} bytes")
             raise CustomException(CustomError.DOWNLOAD_FILE_FAILED)
         
+        logger.info(f"Download success, url: {url}, save_path: {save_path}")
         return save_path
     except Exception as e:
         # 清理可能已部分下载的文件
