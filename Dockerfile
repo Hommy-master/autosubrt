@@ -1,8 +1,7 @@
 FROM python:3.11-slim
 
-# 使用官方推荐方式安装 uv
-ADD https://astral.sh/uv/install.sh /install.sh
-RUN chmod +x /install.sh && /install.sh && rm /install.sh
+# 使用pip安装uv
+RUN pip install --no-cache-dir uv
 
 # 验证uv安装
 RUN uv --version

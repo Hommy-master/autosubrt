@@ -14,18 +14,6 @@ jobs:
       - name: 准备代码
         uses: actions/checkout@v4
         
-      # 安装uv环境
-      - name: 安装uv
-        uses: astral-sh/setup-uv@v2
-        with:
-          version: "0.8.11"
-          enable-cache: true
-
-      - name: 准备python环境
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: 准备生产环境文件
         run: |
           mkdir -p dist/bin
