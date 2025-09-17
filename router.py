@@ -7,7 +7,7 @@ import service
 router = APIRouter(prefix="/v1", tags=["v1"])
 
 @router.post("/asr/text", response_model=schemas.AsrTextResponse)
-def asr_text(request: Request, asr: schemas.AsrTextRequest):
+def asr_text(asr: schemas.AsrTextRequest):
     """
     语音 -> 纯文本
     """

@@ -24,15 +24,32 @@ def asr_text(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
-    # 1. 下载音频文件
+    try:
+        # 1. 下载音频文件
+        audio_file = helper.download(audio_url, config.TEMP_DIR)
 
-    print(f"audio_url: {audio_url}\n")
-
-    return ""
+        # 2. 执行音频转文本
+        result = model.generate(input=audio_file)
+        
+        # 3. 提取文本结果
+        if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
+            text = result[0]["text"]
+            logger.info(f"ASR text success, text length: {len(text)}")
+            return text
+        else:
+            logger.warning("Empty ASR result")
+            return ""
+            
+    except CustomException:
+        # 自定义异常直接抛出
+        raise
+    except Exception as e:
+        logger.error(f"ASR process failed: {str(e)}, detail: {traceback.format_exc()}")
+        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
 
 def asr_srt(audio_url: str) -> str:
     """
-    语音 -> 字幕
+    语音 -> 字幕（提取视频文案）
     
     Args:
         audio_url: 音频URL
@@ -45,7 +62,6 @@ def asr_srt(audio_url: str) -> str:
     """
     # 1. 下载音频文件
     audio_file = helper.download(audio_url, config.TEMP_DIR)
-    logger.info(f"Download audio file success, audio_url: {audio_url}, audio_file: {audio_file}")
 
     # 2. 生成srt文件名
     srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
