@@ -19,7 +19,7 @@ COPY dist/ .
 RUN uv sync --no-dev --no-cache && uv cache prune
 
 # 暴露应用端口
-EXPOSE 60000
+EXPOSE 30000
 
 # 设置环境变量，指定uv缓存目录和用户主目录
 ENV PYTHONDONTWRITEBYTECODE=1 \

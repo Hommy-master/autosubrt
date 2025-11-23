@@ -45,5 +45,5 @@ for r in app.routes:
 if __name__ == "__main__":
     import uvicorn
     logger.info("Start AutoSubRT Service ...")
-    uvicorn.run(app, host="0.0.0.0", port=60000, lifespan="on")
+    uvicorn.run(app, host="0.0.0.0", port=30000, lifespan="on")
     logger.info("AutoSubRT Service stopped")
