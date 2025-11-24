@@ -770,3 +770,70 @@ def _calculate_retry_delay(attempt: int, error_category: str, consecutive_failur
     
     final_delay = min(int(base_delay * multiplier), MAX_RETRY_DELAY)
     return max(final_delay, 1)  # 最少等待1秒
+
+def _safe_remove_file(file_path: str) -> None:
+    """
+    安全删除文件，忽略删除错误
+    
+    Args:
+        file_path: 要删除的文件路径
+    """
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logger.debug(f"Successfully removed file: {file_path}")
+    except Exception as e:
+        logger.warning(f"Failed to remove file {file_path}: {e}")
+
+def _validate_download_integrity_with_resume(
+    response: requests.Response, 
+    save_path: str, 
+    url: str, 
+    is_resume: bool = False
+) -> None:
+    """
+    验证下载文件的完整性（支持断点续传）
+    
+    Args:
+        response: HTTP响应对象
+        save_path: 文件保存路径
+        url: 文件URL（用于日志）
+        is_resume: 是否为断点续传
+    
+    Raises:
+        CustomException: 文件不完整时抛出
+    """
+    actual_size = os.path.getsize(save_path)
+    
+    if is_resume:
+        # 断点续传时，检查Content-Range头
+        content_range = response.headers.get('Content-Range')
+        if content_range:
+            # Content-Range: bytes 1024-2047/2048
+            try:
+                range_info = content_range.split('/')[-1]
+                if range_info != '*':
+                    expected_total_size = int(range_info)
+                    if actual_size != expected_total_size:
+                        os.remove(save_path)
+                        logger.warning(
+                            f"Resume download failed, url: {url}, "
+                            f"error: File download incomplete: expected {expected_total_size} bytes, "
+                            f"actual {actual_size} bytes"
+                        )
+                        raise CustomException(CustomError.DOWNLOAD_FILE_FAILED)
+            except (ValueError, IndexError) as e:
+                logger.warning(f"Failed to parse Content-Range header: {content_range}, error: {e}")
+    else:
+        # 全新下载时，检查Content-Length头
+        content_length = response.headers.get('Content-Length')
+        if content_length:
+            expected_size = int(content_length)
+            if actual_size != expected_size:
+                os.remove(save_path)
+                logger.warning(
+                    f"Download failed, url: {url}, "
+                    f"error: File download incomplete: expected {expected_size} bytes, "
+                    f"actual {actual_size} bytes"
+                )
+                raise CustomException(CustomError.DOWNLOAD_FILE_FAILED)
