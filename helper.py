@@ -7,7 +7,7 @@ from logger import logger
 from exceptions import CustomException, CustomError
 
 
-def download(url, save_dir, limit=30*1024*1024, timeout=180) -> str:
+def download(url, save_dir, limit=100*1024*1024, timeout=180) -> str:
     """
     下载文件并根据Content-Type判断文件类型
     

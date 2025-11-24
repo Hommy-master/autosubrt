@@ -12,6 +12,7 @@ class CustomError(Enum):
     RECOGNIZE_AUDIO_FAILED = (2001, "识别音频失败", "Failed to recognize audio")
     FILE_SIZE_LIMIT_EXCEEDED = (2002, "文件大小超出限制", "File size exceeds the limit")
     DOWNLOAD_FILE_FAILED = (2003, "下载文件失败", "Download file failed")
+    PROCESS_VIDEO_FAILED = (2004, "处理视频失败", "Process video failed")
 
     # ===== 系统错误码 (9000-9999) =====
     INTERNAL_SERVER_ERROR = (9998, "系统内部错误", "Internal server error")

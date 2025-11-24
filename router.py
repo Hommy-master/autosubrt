@@ -6,7 +6,7 @@ import service
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
-@router.post("/text", response_model=schemas.AsrTextResponse)
+@router.post("/asr/text", response_model=schemas.AsrTextResponse)
 def asr_text(asr: schemas.AsrTextRequest):
     """
     语音 -> 纯文本
@@ -19,7 +19,7 @@ def asr_text(asr: schemas.AsrTextRequest):
 
     return schemas.AsrTextResponse(text=text)
 
-@router.post("/srt", response_model=schemas.AsrSrtResponse)
+@router.post("/asr/srt", response_model=schemas.AsrSrtResponse)
 def asr_srt(asr: schemas.AsrSrtRequest):
     """
     语音 -> 字幕
@@ -32,18 +32,20 @@ def asr_srt(asr: schemas.AsrSrtRequest):
     logger.info(f"generate srt: {srt_url}")
     return schemas.AsrSrtResponse(srt_url=srt_url)
 
-@router.post("/embed", response_model=schemas.AsrEmbedResponse)
-def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):
+@router.post("/video/add_subtitles", response_model=schemas.AddSubtitlesResponse)
+def add_subtitles(request: Request, params: schemas.AddSubtitlesRequest):
     """
-    视频（提取语音，识别字幕） -> 嵌入字幕
+    为视频添加字幕
     """
 
     # 调用service层处理业务逻辑
-    embed_url = service.asr_embed(
-        video_url=asr.video_url,
+    video_url = service.add_subtitles(
+        video_url=params.video,
+        subtitle_url=params.subtitle_url,
+        subtitle_config=params.subtitle_config
     )
 
-    return schemas.AsrEmbedResponse(video_url=embed_url)
+    return schemas.AddSubtitlesResponse(video_url=video_url)
 
 # 健康检查端点
 @router.get("/health", summary="健康检查")
