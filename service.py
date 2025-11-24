@@ -88,14 +88,14 @@ def asr_srt(audio_url: str) -> str:
     # 4. 生成下载路径
     return gen_download_url(srt_file)
 
-def add_subtitles(video_url: str, subtitle_url: str, subtitle_config: dict) -> str:
+def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
     """
     为视频添加字幕
     
     Args:
         video_url: 视频URL
         subtitle_url: 字幕文件URL
-        subtitle_config: 字幕配置参数
+        subtitle_config: 字幕配置参数 (SubtitleConfig 对象或字典)
         
     Returns:
         video_url: 添加字幕后的视频URL
@@ -117,17 +117,16 @@ def add_subtitles(video_url: str, subtitle_url: str, subtitle_config: dict) -> s
         # 确保输出目录存在
         os.makedirs(os.path.dirname(output_video_file), exist_ok=True)
         
-        # 处理Windows路径中的反斜杠问题，使用正斜杠
-        subtitle_file_escaped = subtitle_file.replace('\\', '/')
-        video_file_escaped = video_file.replace('\\', '/')
-        output_video_file_escaped = output_video_file.replace('\\', '/')
-        
-        # 构建ffmpeg命令
-        import shlex
-        
         # 解析字幕配置参数
-        font_color = subtitle_config.get("font_color", "#FF0000FF")
-        font_size = subtitle_config.get("font_size", 40)
+        # 检查subtitle_config是字典还是对象
+        if hasattr(subtitle_config, 'font_color'):
+            # Pydantic模型对象
+            font_color = subtitle_config.font_color
+            font_size = subtitle_config.font_size
+        else:
+            # 字典
+            font_color = subtitle_config.get("font_color", "#FF0000FF")
+            font_size = subtitle_config.get("font_size", 40)
         
         # 构建字幕样式参数
         # 将颜色格式从 #AARRGGBB 转换为 &HAABBGGRR
@@ -141,26 +140,31 @@ def add_subtitles(video_url: str, subtitle_url: str, subtitle_config: dict) -> s
         # 构建字幕样式
         subtitle_style = f"Outline=2,OutlineColour=&H000000,PrimaryColour={color_value},FontName=SJbangshu,FontSize={font_size}"
         
+        # 构建并执行FFmpeg命令
+        import subprocess
+        import shlex
+        
+        # 处理Windows路径问题，将反斜杠转换为正斜杠
+        subtitle_file_fixed = subtitle_file.replace('\\', '/')
+        video_file_fixed = video_file.replace('\\', '/')
+        
         ffmpeg_cmd = [
             "ffmpeg",
             "-loglevel", "error",
-            "-i", video_file_escaped,
-            "-vf", f"subtitles={subtitle_file_escaped}:force_style='{subtitle_style}'",
+            "-i", video_file_fixed,
+            "-vf", f"subtitles='{subtitle_file_fixed}':force_style='{subtitle_style}'",
             "-c:a", "copy",
-            output_video_file_escaped
+            output_video_file
         ]
         
-        # 执行ffmpeg命令
-        import subprocess
-        cmd_str = ' '.join(shlex.quote(arg) if i > 0 else arg for i, arg in enumerate(ffmpeg_cmd))
-        logger.info(f"Executing FFmpeg command: {cmd_str}")
-        result = subprocess.run(cmd_str, capture_output=True, text=True, shell=True)
+        logger.info(f"Executing FFmpeg command: {' '.join(shlex.quote(arg) for arg in ffmpeg_cmd)}")
+        result = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
             logger.error(f"FFmpeg process failed: {result.stderr}")
             raise CustomException(err=CustomError.PROCESS_VIDEO_FAILED)
         
-        logger.info(f"Add subtitles success, output_video_file: {output_video_file}")
+        logger.info(f"Embed subtitles success, output_video_file: {output_video_file}")
         
         # 5. 生成下载路径
         return gen_download_url(output_video_file)
