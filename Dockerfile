@@ -18,6 +18,17 @@ COPY dist/ .
 # 安装依赖（仍使用root用户确保权限）
 RUN uv sync --no-dev --no-cache && uv cache prune
 
+# 安装所需的字体和工具
+RUN apk add --no-cache fontconfig ttf-dejavu && \
+    mkdir -p /usr/share/fonts/truetype && \
+    fc-cache -f -v
+
+# 将字体文件复制到镜像中
+COPY fonts/ /usr/share/fonts/truetype/
+
+# 更新字体缓存以使新字体生效
+RUN fc-cache -f -v
+
 # 暴露应用端口
 EXPOSE 30000
 
