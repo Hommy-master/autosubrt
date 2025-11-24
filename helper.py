@@ -22,6 +22,25 @@ CONNECTION_RETRY_DELAY = 1  # 连接重试间隔时间（秒）
 MAX_RETRY_DELAY = 8  # 最大重试等待时间8秒，控制总时间
 MIN_PARTIAL_SIZE = 1024  # 最小部分下载大小（字节），小于此尺寸不使用断点续传
 
+# 网络质量评估阈值
+NETWORK_GOOD_THRESHOLD = 0.5  # 0.5秒内响应认为网络良好
+NETWORK_MEDIUM_THRESHOLD = 2.0  # 2秒内响应认为网络中等
+
+# HTTP连接池配置
+CONNECTION_POOL_SIZE = 3  # 连接池大小
+CONNECTION_POOL_MAXSIZE = 5  # 连接池最大连接数
+
+# HTTP请求头（优化网络稳定性）
+DOWNLOAD_HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': '*/*',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Accept-Encoding': 'gzip, deflate',  # 支持压缩提高传输效率
+    'Connection': 'keep-alive',  # 保持连接
+    'Cache-Control': 'no-cache',  # 不使用缓存
+    'Pragma': 'no-cache',  # 兼容性缓存控制
+    'Keep-Alive': 'timeout=30, max=3'  # Keep-Alive配置
+}
 
 def download(url: str, save_dir: str, limit: int = DEFAULT_FILE_SIZE_LIMIT, 
             timeout: int = DEFAULT_DOWNLOAD_TIMEOUT, retry: int = DEFAULT_RETRY_COUNT) -> str:
