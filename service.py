@@ -10,6 +10,7 @@ import os
 
 # 加载模型（只加载一次）
 model = None
+punc_model = None
 
 def asr_text(audio_url: str) -> str:
     """
@@ -35,6 +36,20 @@ def asr_text(audio_url: str) -> str:
         if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
             text = result[0]["text"]
             logger.info(f"ASR text success, text length: {len(text)}")
+            
+            # 4. 添加标点符号
+            global punc_model
+            if punc_model is not None:
+                try:
+                    punc_result = punc_model.generate(input=text)
+                    if isinstance(punc_result, list) and len(punc_result) > 0 and "text" in punc_result[0]:
+                        punctuated_text = punc_result[0]["text"]
+                        logger.info(f"Punctuation success, text length: {len(punctuated_text)}")
+                        return punctuated_text
+                except Exception as e:
+                    logger.error(f"Punctuation process failed: {str(e)}, detail: {traceback.format_exc()}")
+            
+            # 如果标点符号处理失败或未启用，返回原始文本
             return text
         else:
             logger.warning("Empty ASR result")
@@ -92,7 +107,7 @@ def asr_embed(video_url: str) -> str:
 
 def load_model():
     """加载语音识别模型"""
-    global model
+    global model, punc_model
     if model is None:
         try:
             logger.info("load paraformer-zh model...")
@@ -102,6 +117,18 @@ def load_model():
             logger.error(f"paraformer-zh model load failed: {str(e)}")
             logger.error(traceback.format_exc())
             raise
+    
+    # 加载标点符号模型
+    if punc_model is None:
+        try:
+            logger.info("load ct-punc model...")
+            from funasr import AutoModel as AutoPuncModel
+            punc_model = AutoPuncModel(model="ct-punc", disable_update=True)
+            logger.info("ct-punc model load success")
+        except Exception as e:
+            logger.error(f"ct-punc model load failed: {str(e)}")
+            logger.error(traceback.format_exc())
+            # 标点符号模型加载失败不抛出异常，只记录日志
 
 def gen_download_url(file_path: str) -> str:
     """
