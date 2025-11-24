@@ -3,6 +3,8 @@ name: Docker Image CI Dev
 on:
   push:
     branches: [ "main" ]
+    tags:
+      - 'v*'  # 当推送v开头的tag时触发
   pull_request:
     branches: [ "main" ]
 
