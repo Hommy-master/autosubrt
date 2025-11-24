@@ -6,7 +6,7 @@ import service
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
-@router.post("/asr/text", response_model=schemas.AsrTextResponse)
+@router.post("/text", response_model=schemas.AsrTextResponse)
 def asr_text(asr: schemas.AsrTextRequest):
     """
     语音 -> 纯文本
@@ -19,7 +19,7 @@ def asr_text(asr: schemas.AsrTextRequest):
 
     return schemas.AsrTextResponse(text=text)
 
-@router.post("/asr/srt", response_model=schemas.AsrSrtResponse)
+@router.post("/srt", response_model=schemas.AsrSrtResponse)
 def asr_srt(asr: schemas.AsrSrtRequest):
     """
     语音 -> 字幕
@@ -32,7 +32,7 @@ def asr_srt(asr: schemas.AsrSrtRequest):
     logger.info(f"generate srt: {srt_url}")
     return schemas.AsrSrtResponse(srt_url=srt_url)
 
-@router.post("/asr/embed", response_model=schemas.AsrEmbedResponse)
+@router.post("/embed", response_model=schemas.AsrEmbedResponse)
 def asr_embed(request: Request, asr: schemas.AsrEmbedRequest):
     """
     视频（提取语音，识别字幕） -> 嵌入字幕

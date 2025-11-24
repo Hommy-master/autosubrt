@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="AutoSubRT API", description="语音转SRT字幕服务", lifespan=lifespan)
 
 # 3. 注册路由
-app.include_router(router.router, prefix="/openapi", tags=["AutoSubRT"])
+app.include_router(router.router, prefix="/openapi/autosubrt", tags=["AutoSubRT"])
 
 # 4. 添加中间件
 app.add_middleware(middlewares.PrepareMiddleware)
