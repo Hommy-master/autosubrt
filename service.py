@@ -88,6 +88,7 @@ def asr_srt(audio_url: str) -> str:
     # 4. 生成下载路径
     return gen_download_url(srt_file)
 
+# 使用FFmpeg命令添加字幕：ffmpeg -v error -i input.mp4 -vf "subtitles=subtitle.srt:force_style='Outline=2,OutlineColour=&H000000,PrimaryColour=&HFFFFFF,FontName=SJbangshu,FontSize=24'" -c:a copy output.mp4
 def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
     """
     为视频添加字幕

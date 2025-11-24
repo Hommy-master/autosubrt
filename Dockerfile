@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-alpine
 
 # 使用pip安装uv
 RUN pip install --no-cache-dir uv
