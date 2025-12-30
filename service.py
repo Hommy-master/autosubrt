@@ -25,6 +25,7 @@ def asr_text(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
+    audio_file = None
     try:
         # 1. 下载音频文件
         audio_file = helper.download(audio_url, config.TEMP_DIR)
@@ -61,6 +62,14 @@ def asr_text(audio_url: str) -> str:
     except Exception as e:
         logger.error(f"ASR process failed: {str(e)}, detail: {traceback.format_exc()}")
         raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
+    finally:
+        # 清理临时音频文件
+        if audio_file and os.path.exists(audio_file):
+            try:
+                os.remove(audio_file)
+                logger.info(f"Temporary audio file cleaned up: {audio_file}")
+            except Exception as e:
+                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
 def asr_srt(audio_url: str) -> str:
     """
@@ -75,18 +84,28 @@ def asr_srt(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
-    # 1. 下载音频文件
-    audio_file = helper.download(audio_url, config.TEMP_DIR)
+    audio_file = None
+    try:
+        # 1. 下载音频文件
+        audio_file = helper.download(audio_url, config.TEMP_DIR)
 
-    # 2. 生成srt文件名
-    srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
+        # 2. 生成srt文件名
+        srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
 
-    # 3. 执行音频转srt格式文件
-    process_audio_to_srt(audio_file, srt_file)
-    logger.info(f"Process audio to srt success, srt_file: {srt_file}")
+        # 3. 执行音频转srt格式文件
+        process_audio_to_srt(audio_file, srt_file)
+        logger.info(f"Process audio to srt success, srt_file: {srt_file}")
 
-    # 4. 生成下载路径
-    return gen_download_url(srt_file)
+        # 4. 生成下载路径
+        return gen_download_url(srt_file)
+    finally:
+        # 清理临时音频文件
+        if audio_file and os.path.exists(audio_file):
+            try:
+                os.remove(audio_file)
+                logger.info(f"Temporary audio file cleaned up: {audio_file}")
+            except Exception as e:
+                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
 # 使用FFmpeg命令添加字幕：ffmpeg -v error -i input.mp4 -vf "subtitles=subtitle.srt:force_style='Outline=2,OutlineColour=&H000000,PrimaryColour=&HFFFFFF,FontName=SJbangshu,FontSize=24'" -c:a copy output.mp4
 def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
@@ -104,6 +123,8 @@ def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
     Raises:
         CustomException: 自定义异常
     """
+    video_file = None
+    subtitle_file = None
     try:
         # 1. 下载视频文件
         video_file = helper.download(video_url, config.TEMP_DIR)
@@ -176,6 +197,15 @@ def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
     except Exception as e:
         logger.error(f"Process video embed subtitles failed: {str(e)}, detail: {traceback.format_exc()}")
         raise CustomException(err=CustomError.PROCESS_VIDEO_FAILED)
+    finally:
+        # 清理临时视频和字幕文件
+        for temp_file in [video_file, subtitle_file]:
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    logger.info(f"Temporary file cleaned up: {temp_file}")
+                except Exception as e:
+                    logger.error(f"Failed to remove temporary file {temp_file}: {str(e)}")
 
 def load_model():
     """加载语音识别模型"""
