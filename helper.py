@@ -7,9 +7,10 @@ from logger import logger
 from exceptions import CustomException, CustomError
 from typing import Optional
 import time
+from config import FILE_SIZE_LIMIT  # 从配置文件导入文件大小限制
 
 # 常量配置
-DEFAULT_FILE_SIZE_LIMIT = 200 * 1024 * 1024  # 200MB
+DEFAULT_FILE_SIZE_LIMIT = FILE_SIZE_LIMIT  # 从环境变量读取文件大小限制，默认100MB
 DEFAULT_DOWNLOAD_TIMEOUT = 90  # 总下载超时时间90秒（用户要求）
 DEFAULT_CONNECT_TIMEOUT = 10  # 连接超时10秒，快速失败
 DEFAULT_READ_TIMEOUT = 15  # 读取超时15秒，平衡稳定性和速度
@@ -50,7 +51,7 @@ def download(url: str, save_dir: str, limit: int = DEFAULT_FILE_SIZE_LIMIT,
     Args:
         url: 文件的URL地址
         save_dir: 文件保存目录
-        limit: 文件大小限制（字节），默认300MB
+        limit: 文件大小限制（字节），默认100MB（可从环境变量FILE_SIZE_LIMIT配置）
         timeout: 整体下载超时时间（秒），默认5分钟
         retry: 下载失败时的重试次数，默认5次
     

@@ -9,3 +9,6 @@ SRT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output", "srt")
 
 # 将容器内的文件路径转成一个下载路径，执行替换操作，即将/app/ -> https://autosubrt.jcaigc.cn/
 DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "https://autosubrt.jcaigc.cn/")
+
+# 文件大小限制，默认为100MB (100 * 1024 * 1024 字节)
+FILE_SIZE_LIMIT = int(os.getenv("FILE_SIZE_LIMIT", str(100 * 1024 * 1024)))
