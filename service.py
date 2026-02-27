@@ -435,8 +435,21 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
             except Exception as e:
                 logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
+def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
+    """根据标点符号分割文本为句子，但不在结果中包含标点符号"""
+    import re
+    # 使用正则表达式按标点符号分割，但不保留标点符号在结果中
+    # 包含中文和英文的常见标点符号：！，；。？\n\r
+    sentences = re.split(r'[。！？，；.!?,;:\n\r]', text)
+    
+    # 过滤掉空字符串和只包含空白的字符串
+    result = [s.strip() for s in sentences if s.strip()]
+    
+    return result
+
+
 def split_text_by_punctuation(text: str) -> list[str]:
-    """根据标点符号分割文本为句子"""
+    """根据标点符号分割文本为句子，保留标点符号（用于其他用途）"""
     import re
     # 使用正则表达式按标点符号分割，保留标点符号
     # 包含中文和英文的常见标点符号：！，；。？\n\r
@@ -578,8 +591,8 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
             # 如果没有有效的时间戳，返回默认结果
             return [text], [{"start": 0, "end": 30000000}]  # 30秒 = 30,000,000微秒
         
-        # 4. 根据文本中的标点符号分割句子
-        sentences = split_text_by_punctuation(text)
+        # 4. 根据文本中的标点符号分割句子，但不在结果中包含标点符号
+        sentences = split_text_by_punctuation_without_symbols(text)
         
         # 5. 根据最大字符数进一步分割长句子
         final_texts = []
