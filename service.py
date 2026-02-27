@@ -439,13 +439,14 @@ def split_text_by_punctuation(text: str) -> list[str]:
     """根据标点符号分割文本为句子"""
     import re
     # 使用正则表达式按标点符号分割，保留标点符号
-    sentences = re.split(r'([。！？.!?])', text)
+    # 包含中文和英文的常见标点符号：！，；。？\n\r
+    sentences = re.split(r'([。！？，；.!?,;:\n\r])', text)
     
     # 合并句子和标点符号
     result = []
     i = 0
     while i < len(sentences):
-        if i + 1 < len(sentences) and sentences[i + 1] in '。！？.!?':
+        if i + 1 < len(sentences) and sentences[i + 1] in '。！？，；.!?,;:\n\r':
             # 合并句子和标点符号
             sentence = sentences[i] + sentences[i + 1]
             if sentence.strip():  # 只添加非空句子
