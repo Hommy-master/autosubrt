@@ -49,8 +49,8 @@ class AsrTextAlignRequest(BaseModel):
 
 class TimelineItem(BaseModel):
     """时间线项"""
-    start: int = Field(..., description="开始时间(毫秒)")
-    end: int = Field(..., description="结束时间(毫秒)")
+    start: int = Field(..., description="开始时间(微秒)")
+    end: int = Field(..., description="结束时间(微秒)")
 
 class AsrTextAlignResponse(BaseModel):
     """语音 -> 对齐字幕时间线响应参数"""
