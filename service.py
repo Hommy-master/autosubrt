@@ -370,3 +370,285 @@ def process_audio_to_srt(audio_path: str, srt_path: str):
         logger.error(f"Handle audio file failed: {str(e)}, detail: {traceback.format_exc()}")
         raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
 
+def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
+    """
+    根据音频对齐文本时间线
+    
+    Args:
+        audio_url: 音频URL
+        text: 需要对齐的文本
+        max_chars_per_line: 每行最大字数
+    
+    Returns:
+        tuple: (texts列表, timelines列表)
+    
+    Raises:
+        CustomException: 自定义异常
+    """
+    audio_file = None
+    try:
+        # 1. 下载音频文件
+        audio_file = helper.download(audio_url, config.TEMP_DIR)
+        
+        # 2. 使用模型生成识别结果（获取时间戳）
+        result = model.generate(input=audio_file)
+        
+        # 3. 提取ASR结果
+        asr_text, timestamps = extract_asr_result(result)
+        
+        if asr_text is None or not timestamps:
+            logger.warning("No valid ASR result or timestamps")
+            # 如果没有有效的时间戳，返回默认结果
+            return [text], [{"start": 0, "end": 30000}]
+        
+        # 4. 根据文本中的标点符号分割句子
+        sentences = split_text_by_punctuation(text)
+        
+        # 5. 根据最大字符数进一步分割长句子
+        final_texts = []
+        for sentence in sentences:
+            if len(sentence) <= max_chars_per_line:
+                final_texts.append(sentence)
+            else:
+                # 按最大字符数分割
+                chunks = split_text_by_length(sentence, max_chars_per_line)
+                final_texts.extend(chunks)
+        
+        # 6. 将时间戳分配给文本片段
+        timelines = distribute_timestamps_to_texts(final_texts, timestamps, len(asr_text))
+        
+        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines")
+        
+        return final_texts, timelines
+        
+    except CustomException:
+        raise
+    except Exception as e:
+        logger.error(f"Text alignment failed: {str(e)}, detail: {traceback.format_exc()}")
+        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
+    finally:
+        # 清理临时音频文件
+        if audio_file and os.path.exists(audio_file):
+            try:
+                os.remove(audio_file)
+                logger.info(f"Temporary audio file cleaned up: {audio_file}")
+            except Exception as e:
+                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
+
+def split_text_by_punctuation(text: str) -> list[str]:
+    """根据标点符号分割文本为句子"""
+    import re
+    # 使用正则表达式按标点符号分割，保留标点符号
+    sentences = re.split(r'([。！？.!?])', text)
+    
+    # 合并句子和标点符号
+    result = []
+    i = 0
+    while i < len(sentences):
+        if i + 1 < len(sentences) and sentences[i + 1] in '。！？.!?':
+            # 合并句子和标点符号
+            sentence = sentences[i] + sentences[i + 1]
+            if sentence.strip():  # 只添加非空句子
+                result.append(sentence.strip())
+            i += 2
+        else:
+            if sentences[i].strip():  # 只添加非空句子
+                result.append(sentences[i].strip())
+            i += 1
+    
+    # 过滤掉空字符串
+    return [s for s in result if s]
+
+def split_text_by_length(text: str, max_length: int) -> list[str]:
+    """按最大长度分割文本"""
+    if len(text) <= max_length:
+        return [text]
+    
+    result = []
+    start = 0
+    
+    while start < len(text):
+        end = start + max_length
+        if end >= len(text):
+            result.append(text[start:])
+            break
+        
+        # 尽量在词边界处分割
+        # 找到最后一个空格或标点符号的位置
+        split_pos = end
+        for i in range(end, start, -1):
+            if text[i] in ' 	，。！？,!?' or i == start + 1:
+                split_pos = i
+                break
+        
+        result.append(text[start:split_pos].strip())
+        start = split_pos
+        
+        # 跳过空白字符
+        while start < len(text) and text[start] in ' \t':
+            start += 1
+    
+    return [s for s in result if s]
+
+def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], total_asr_length: int) -> list[dict]:
+    """将时间戳分配给文本片段"""
+    if not texts or not timestamps:
+        return [{"start": 0, "end": 30000}]
+    
+    # 过滤有效时间戳
+    valid_timestamps = filter_valid_timestamps(timestamps)
+    if not valid_timestamps:
+        return [{"start": 0, "end": 30000}]
+    
+    # 计算总的音频时长
+    total_duration = valid_timestamps[-1][1] - valid_timestamps[0][0]
+    
+    # 计算每个文本片段的相对长度比例
+    text_lengths = [len(text) for text in texts]
+    total_text_length = sum(text_lengths)
+    
+    if total_text_length == 0:
+        return [{"start": 0, "end": 30000}]
+    
+    # 按比例分配时间
+    timelines = []
+    current_time = valid_timestamps[0][0]  # 从第一个时间戳开始
+    
+    for i, (text, length) in enumerate(zip(texts, text_lengths)):
+        # 计算该文本片段应该占用的时间比例
+        duration_ratio = length / total_text_length
+        segment_duration = int(total_duration * duration_ratio)
+        
+        # 确保不会超出总时长
+        if i == len(texts) - 1:
+            # 最后一个片段，确保结束时间正确
+            end_time = valid_timestamps[-1][1]
+        else:
+            end_time = min(current_time + segment_duration, valid_timestamps[-1][1])
+        
+        timelines.append({
+            "start": current_time,
+            "end": end_time
+        })
+        
+        current_time = end_time
+        
+        # 添加小的间隔避免时间重叠
+        if current_time < valid_timestamps[-1][1] and i < len(texts) - 1:
+            current_time += 100  # 100ms间隔
+    
+    # 确保第一个时间戳不小于0
+    if timelines and timelines[0]["start"] < 0:
+        offset = -timelines[0]["start"]
+        for timeline in timelines:
+            timeline["start"] += offset
+            timeline["end"] += offset
+    
+    return timelines
+
+def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
+    """
+    根据音频对齐文本时间线
+    
+    Args:
+        audio_url: 音频URL
+        text: 需要对齐的文本
+        max_chars_per_line: 每行最大字数
+    
+    Returns:
+        tuple: (texts列表, timelines列表)
+    
+    Raises:
+        CustomException: 自定义异常
+    """
+    audio_file = None
+    try:
+        # 1. 下载音频文件
+        audio_file = helper.download(audio_url, config.TEMP_DIR)
+        
+        # 2. 使用模型生成识别结果（获取时间戳）
+        result = model.generate(input=audio_file)  # 获取ASR结果及时间戳
+        
+        # 3. 提取ASR结果
+        asr_text, timestamps = extract_asr_result(result)
+        
+        if asr_text is None or not timestamps:
+            logger.warning("No valid ASR result or timestamps")
+            # 如果没有有效的时间戳，返回默认结果
+            return [text], [{"start": 0, "end": 30000}]
+        
+        # 4. 根据文本中的标点符号分割句子
+        sentences = split_text_by_punctuation(text)
+        
+        # 5. 根据最大字符数进一步分割长句子
+        final_texts = []
+        for sentence in sentences:
+            if len(sentence) <= max_chars_per_line:
+                final_texts.append(sentence)
+            else:
+                # 按最大字符数分割
+                chunks = split_text_by_length(sentence, max_chars_per_line)
+                final_texts.extend(chunks)
+        
+        # 6. 将时间戳分配给文本片段
+        timelines = distribute_timestamps_to_texts_for_real(final_texts, timestamps)
+        
+        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines")
+        
+        return final_texts, timelines
+        
+    except CustomException:
+        raise
+    except Exception as e:
+        logger.error(f"Text alignment failed: {str(e)}, detail: {traceback.format_exc()}")
+        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
+    finally:
+        # 清理临时音频文件
+        if audio_file and os.path.exists(audio_file):
+            try:
+                os.remove(audio_file)
+                logger.info(f"Temporary audio file cleaned up: {audio_file}")
+            except Exception as e:
+                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
+
+def distribute_timestamps_to_texts_for_real(texts: list[str], timestamps: list[list]) -> list[dict]:
+    """基于真实时间戳数据分配时间给文本片段"""
+    if not texts or not timestamps:
+        return [{"start": 0, "end": 30000}]
+    
+    # 过滤有效时间戳
+    valid_timestamps = filter_valid_timestamps(timestamps)
+    if not valid_timestamps:
+        return [{"start": 0, "end": 30000}]
+    
+    # 总的词汇数量
+    total_words = len(valid_timestamps)
+    total_texts = len(texts)
+    
+    # 如果词汇数量小于文本片段数量，扩展词汇
+    expanded_timestamps = []
+    if total_words < total_texts:
+        # 将现有时间戳扩展到足够多的片段
+        for i in range(total_texts):
+            idx = i % total_words if total_words > 0 else 0
+            expanded_timestamps.append(valid_timestamps[idx])
+    else:
+        expanded_timestamps = valid_timestamps[:total_texts]
+    
+    # 为每个文本片段分配时间戳
+    timelines = []
+    for i, text in enumerate(texts):
+        if i < len(expanded_timestamps):
+            start_time = expanded_timestamps[i][0]
+            end_time = expanded_timestamps[i][1]
+            timelines.append({"start": start_time, "end": end_time})
+        else:
+            # 如果文本片段多于时间戳，使用最后的时间戳或默认值
+            if expanded_timestamps:
+                last_end = expanded_timestamps[-1][1]
+                timelines.append({"start": last_end, "end": last_end + 3000})
+            else:
+                timelines.append({"start": 0, "end": 3000})
+    
+    return timelines
+

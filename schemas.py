@@ -40,3 +40,19 @@ class AddSubtitlesRequest(BaseModel):
 class AddSubtitlesResponse(BaseModel):
     """添加字幕响应参数"""
     video_url: str = Field(default="", description="视频文件URL")
+
+class AsrTextAlignRequest(BaseModel):
+    """语音 -> 对齐字幕时间线请求参数"""
+    audio_url: str = Field(..., description="音频文件URL")
+    text: str = Field(..., description="音频对应字幕文本")
+    max_chars_per_line: Optional[int] = Field(default=15, description="每行最大字数")
+
+class TimelineItem(BaseModel):
+    """时间线项"""
+    start: int = Field(..., description="开始时间(毫秒)")
+    end: int = Field(..., description="结束时间(毫秒)")
+
+class AsrTextAlignResponse(BaseModel):
+    """语音 -> 对齐字幕时间线响应参数"""
+    texts: list[str] = Field(..., description="对齐后的文本列表")
+    timelines: list[TimelineItem] = Field(..., description="对应的时间线列表")

@@ -32,6 +32,25 @@ def asr_srt(asr: schemas.AsrSrtRequest):
     logger.info(f"generate srt: {srt_url}")
     return schemas.AsrSrtResponse(srt_url=srt_url)
 
+@router.post("/asr/text/align", response_model=schemas.AsrTextAlignResponse)
+def asr_text_align(request: schemas.AsrTextAlignRequest):
+    """
+    语音 -> 对齐字幕时间线
+    根据音频对齐给定文本的时间线
+    """
+    
+    # 调用service层处理业务逻辑
+    texts, timelines = service.align_text_with_audio(
+        audio_url=request.audio_url,
+        text=request.text,
+        max_chars_per_line=request.max_chars_per_line
+    )
+    
+    # 转换时间线格式
+    timeline_items = [schemas.TimelineItem(start=item["start"], end=item["end"]) for item in timelines]
+    
+    return schemas.AsrTextAlignResponse(texts=texts, timelines=timeline_items)
+
 @router.post("/video/add_subtitles", response_model=schemas.AddSubtitlesResponse)
 def add_subtitles(request: Request, params: schemas.AddSubtitlesRequest):
     """
