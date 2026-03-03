@@ -573,76 +573,6 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
     
     return timelines
 
-def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
-    """
-    根据音频对齐文本时间线
-    
-    Args:
-        audio_url: 音频URL
-        text: 需要对齐的文本
-        max_chars_per_line: 每行最大字数
-    
-    Returns:
-        tuple: (texts列表, timelines列表)
-    
-    Raises:
-        CustomException: 自定义异常
-    """
-    audio_file = None
-    try:
-        # 1. 下载音频文件
-        audio_file = helper.download(audio_url, config.TEMP_DIR)
-        
-        # 2. 使用模型生成识别结果（获取时间戳）
-        result = model.generate(input=audio_file)  # 获取ASR结果及时间戳
-        
-        # 3. 提取ASR结果
-        asr_text, timestamps = extract_asr_result(result)
-        
-        if asr_text is None or not timestamps:
-            logger.warning("No valid ASR result or timestamps")
-            # 如果没有有效的时间戳，返回默认结果
-            return [text], [{"start": 0, "end": 30000000}]  # 30秒 = 30,000,000微秒
-        
-        # 4. 根据文本中的标点符号分割句子，但不在结果中包含标点符号
-        sentences = split_text_by_punctuation_without_symbols(text)
-        
-        # 5. 根据最大字符数进一步分割长句子，并跟踪哪些片段来自同一个原始句子
-        final_texts = []
-        sentence_mapping = []  # 记录每个文本片段来自哪个原始句子
-        
-        for sentence_idx, sentence in enumerate(sentences):
-            if len(sentence) <= max_chars_per_line:
-                final_texts.append(sentence)
-                sentence_mapping.append(sentence_idx)  # 记录来源
-            else:
-                # 按最大字符数分割
-                chunks = split_text_by_length(sentence, max_chars_per_line)
-                for chunk in chunks:
-                    final_texts.append(chunk)
-                    sentence_mapping.append(sentence_idx)  # 记录来源
-        
-        # 6. 将时间戳分配给文本片段，对于来自同一原始句子的片段合并时间戳
-        timelines = merge_timestamps_for_original_sentences(final_texts, sentence_mapping, timestamps)
-        
-        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines")
-        
-        return final_texts, timelines
-        
-    except CustomException:
-        raise
-    except Exception as e:
-        logger.error(f"Text alignment failed: {str(e)}, detail: {traceback.format_exc()}")
-        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
-    finally:
-        # 清理临时音频文件
-        if audio_file and os.path.exists(audio_file):
-            try:
-                os.remove(audio_file)
-                logger.info(f"Temporary audio file cleaned up: {audio_file}")
-            except Exception as e:
-                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
-
 def distribute_timestamps_to_texts_for_real(texts: list[str], timestamps: list[list]) -> list[dict]:
     """基于真实时间戳数据分配时间给文本片段（时间单位：微秒）"""
     if not texts or not timestamps:
@@ -669,15 +599,16 @@ def distribute_timestamps_to_texts_for_real(texts: list[str], timestamps: list[l
     
     # 为每个文本片段分配时间戳（转换为微秒）
     timelines = []
+    frame_rate = 300  # FunASR paraformer-zh 的帧率
     for i, text in enumerate(texts):
         if i < len(expanded_timestamps):
-            start_time = expanded_timestamps[i][0] * 1000  #转为微秒
-            end_time = expanded_timestamps[i][1] * 1000    #转为微秒
+            start_time = int(expanded_timestamps[i][0] / frame_rate * 1000000)  # 将帧转换为微秒
+            end_time = int(expanded_timestamps[i][1] / frame_rate * 1000000)    # 将帧转换为微秒
             timelines.append({"start": start_time, "end": end_time})
         else:
             # 如果文本片段多于时间戳，使用最后的时间戳或默认值
             if expanded_timestamps:
-                last_end = expanded_timestamps[-1][1] * 1000
+                last_end = int(expanded_timestamps[-1][1] / frame_rate * 1000000)
                 timelines.append({"start": last_end, "end": last_end + 3000000})  # 3秒 = 3,000,000微秒
             else:
                 timelines.append({"start": 0, "end": 3000000})
@@ -757,10 +688,14 @@ def align_text_with_audio_original_logic(audio_url: str, text: str, max_chars_pe
 
 def merge_timestamps_for_original_sentences(texts: list[str], sentence_mapping: list[int], timestamps: list[list]) -> list[dict]:
     """
-    将时间戳分配给文本片段，对于来自同一原始句子的片段合并时间戳
+    将时间戳分配给文本片段，对于来自同一原始句子的片段按比例分配时间戳
+    保证时间线不重叠且精确
+    
+    FunASR paraformer-zh 返回的时间戳单位是帧（frame），帧率为 300fps
+    需要将帧数转换为微秒：帧数 / 300 * 1000000
     """
     if not texts or not timestamps:
-        return [{"start": 0, "end": 30000000}]  # 30秒 = 30,000,000微秒
+        return [{"start": 0, "end": 30000000}]  # 30 秒 = 30,000,000 微秒
     
     # 过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
@@ -795,9 +730,10 @@ def merge_timestamps_for_original_sentences(texts: list[str], sentence_mapping: 
         first_text_idx = group_indices[0]
         last_text_idx = group_indices[-1]
         
-        # 转换为微秒
-        group_start_time = expanded_timestamps[first_text_idx][0] * 1000
-        group_end_time = expanded_timestamps[last_text_idx][1] * 1000
+        # 将帧转换为微秒：帧数 / 300 * 1000000
+        frame_rate = 300  # FunASR paraformer-zh 的帧率
+        group_start_time = int(expanded_timestamps[first_text_idx][0] / frame_rate * 1000000)
+        group_end_time = int(expanded_timestamps[last_text_idx][1] / frame_rate * 1000000)
         
         # 计算该组的总时长
         group_duration = group_end_time - group_start_time
