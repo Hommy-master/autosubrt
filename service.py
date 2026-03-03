@@ -786,28 +786,58 @@ def merge_timestamps_for_original_sentences(texts: list[str], sentence_mapping: 
     for i, orig_sentence_idx in enumerate(sentence_mapping):
         if orig_sentence_idx not in sentence_groups:
             sentence_groups[orig_sentence_idx] = []
-        sentence_groups[orig_sentence_idx].append(i)  # 存储在texts中的索引
+        sentence_groups[orig_sentence_idx].append(i)  # 存储在 texts 中的索引
     
-    # 为每个原始句子组分配合并的时间戳
+    # 为每个原始句子组分配精确的时间戳（按比例）
     final_timelines = []
-    for text_idx, text in enumerate(texts):
-        orig_sentence_idx = sentence_mapping[text_idx]
+    for orig_sentence_idx, group_indices in sentence_groups.items():
+        # 获取该组的第一个和最后一个片段的时间戳（用于确定总体时间范围）
+        first_text_idx = group_indices[0]
+        last_text_idx = group_indices[-1]
         
-        # 获取该原始句子对应的所有文本片段的索引
-        group_indices = sentence_groups[orig_sentence_idx]
+        # 转换为微秒
+        group_start_time = expanded_timestamps[first_text_idx][0] * 1000
+        group_end_time = expanded_timestamps[last_text_idx][1] * 1000
         
-        # 获取该组的第一个和最后一个片段的时间戳
-        start_idx = group_indices[0]
-        end_idx = group_indices[-1]
+        # 计算该组的总时长
+        group_duration = group_end_time - group_start_time
         
-        # 合并时间戳：开始时间取第一个片段，结束时间取最后一个片段
-        start_time = expanded_timestamps[start_idx][0] * 1000  # 转为微秒
-        end_time = expanded_timestamps[end_idx][1] * 1000      # 转为微秒
+        # 计算该组中所有文本片段的总长度
+        group_total_length = sum(len(texts[i]) for i in group_indices)
         
-        final_timelines.append({
-            "start": start_time,
-            "end": end_time
-        })
+        # 按比例为该组中的每个文本片段分配时间戳
+        current_time = group_start_time
+        for i, text_idx in enumerate(group_indices):
+            text_length = len(texts[text_idx])
+            
+            # 计算该片段的时长比例
+            if i == len(group_indices) - 1:
+                # 最后一个片段，确保使用组的结束时间
+                duration = group_end_time - current_time
+            else:
+                # 按比例计算时长
+                duration_ratio = text_length / group_total_length
+                duration = int(group_duration * duration_ratio)
+            
+            # 设置时间戳
+            start_time = current_time
+            end_time = current_time + duration
+            
+            final_timelines.append({
+                "start": start_time,
+                "end": end_time
+            })
+            
+            # 更新当前时间
+            current_time = end_time
     
-    return final_timelines
+    # 按照原始的文本顺序重新排列时间戳
+    ordered_timelines = [None] * len(texts)
+    timeline_index = 0
+    for orig_sentence_idx, group_indices in sentence_groups.items():
+        for _ in group_indices:
+            ordered_timelines[timeline_index] = final_timelines[timeline_index]
+            timeline_index += 1
+    
+    return ordered_timelines
 
