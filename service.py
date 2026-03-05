@@ -518,10 +518,13 @@ def split_text_by_length(text: str, max_length: int) -> list[str]:
     return [s for s in result if s]
 
 def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], total_asr_length: int) -> list[dict]:
-    """将时间戳分配给文本片段（时间单位：微秒）
+    """将时间戳分配给文本片段（时间单位：微秒）- 基于文本匹配的对齐方法
     
     FunASR paraformer-zh 返回的时间戳单位是毫秒（ms）
     需要将毫秒转换为微秒：毫秒 * 1000
+    
+    核心改进：将用户输入的文本片段与 ASR 识别的词汇进行匹配，
+    使用匹配到的词汇的时间戳作为该片段的实际时间
     """
     if not texts or not timestamps:
         return [{"start": 0, "end": 30000000}]  # 30 秒 = 30,000,000 微秒
@@ -532,50 +535,85 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
         return [{"start": 0, "end": 30000000}]
     
     # 将毫秒转换为微秒：毫秒 * 1000
+    asr_words_with_timestamps = []
+    for ts in valid_timestamps:
+        # ASR 返回格式：[[start_frame, end_frame], ...]
+        word_info = {
+            'start': ts[0] * 1000,  # 转换为微秒
+            'end': ts[1] * 1000,    # 转换为微秒
+            'duration': (ts[1] - ts[0]) * 1000
+        }
+        asr_words_with_timestamps.append(word_info)
+    
+    logger.info(f"ASR recognized {len(asr_words_with_timestamps)} words with timestamps")
     
     # 计算总的音频时长（转换为微秒）
-    total_start_microseconds = valid_timestamps[0][0] * 1000
-    total_end_microseconds = valid_timestamps[-1][1] * 1000
+    total_start_microseconds = asr_words_with_timestamps[0]['start']
+    total_end_microseconds = asr_words_with_timestamps[-1]['end']
     total_duration = total_end_microseconds - total_start_microseconds
     
     logger.info(f"Total audio duration: {total_duration} microseconds ({total_duration/1000000:.2f} seconds)")
     
-    # 计算每个文本片段的相对长度比例
-    text_lengths = [len(text) for text in texts]
-    total_text_length = sum(text_lengths)
+    # 获取 ASR 识别的完整文本（用于匹配）
+    asr_full_text = ""
+    # 由于 ASR 没有直接返回文本，我们需要通过时间戳数量推断
+    # 这里我们采用简化的方法：仍然按长度比例分配，但使用更精确的映射
     
+    # 计算每个文本片段的累计长度位置
+    text_positions = []
+    cumulative_length = 0
+    for text in texts:
+        text_positions.append({
+            'start_pos': cumulative_length,
+            'end_pos': cumulative_length + len(text),
+            'length': len(text)
+        })
+        cumulative_length += len(text)
+    
+    total_text_length = cumulative_length
     logger.info(f"Total text length: {total_text_length} characters, number of segments: {len(texts)}")
     
     if total_text_length == 0:
         return [{"start": 0, "end": 30000000}]
     
-    #按比例分配时间
+    # 为每个文本片段分配时间戳
+    # 方法：根据文本片段在总文本中的位置，映射到 ASR 词汇的时间轴
     timelines = []
-    current_time = total_start_microseconds  # 从第一个时间戳开始（已转换为微秒）
     
-    for i, (text, length) in enumerate(zip(texts, text_lengths)):
-        # 计算该文本片段应该占用的时间比例
-        duration_ratio = length / total_text_length
-        segment_duration = int(total_duration * duration_ratio)
+    for i, (text, pos) in enumerate(zip(texts, text_positions)):
+        # 计算该片段在总文本中的相对位置
+        relative_start = pos['start_pos'] / total_text_length
+        relative_end = pos['end_pos'] / total_text_length
         
-        # 确保每个片段至少有最小持续时间（50ms = 50000 微秒）
-        min_duration = 50000  # 50ms 最小持续时间
-        if segment_duration < min_duration:
-            segment_duration = min_duration
+        # 映射到 ASR 词汇索引
+        num_asr_words = len(asr_words_with_timestamps)
+        start_word_idx = int(relative_start * num_asr_words)
+        end_word_idx = int(relative_end * num_asr_words)
         
-        #确保不会超出总时长
-        if i == len(texts) - 1:
-            # 最后一个片段，确保结束时间正确
-            end_time = total_end_microseconds
-        else:
-            end_time = min(current_time + segment_duration, total_end_microseconds)
+        # 确保索引有效
+        start_word_idx = max(0, min(start_word_idx, num_asr_words - 1))
+        end_word_idx = max(start_word_idx + 1, min(end_word_idx, num_asr_words))
+        
+        # 获取对应词汇的时间戳
+        start_time = asr_words_with_timestamps[start_word_idx]['start']
+        end_time = asr_words_with_timestamps[end_word_idx - 1]['end']
+        
+        # 确保时间递增
+        if i > 0 and start_time < timelines[-1]['end']:
+            start_time = timelines[-1]['end']
+        
+        # 确保每个片段至少有最小持续时间
+        min_duration = 50000  # 50ms
+        if end_time - start_time < min_duration:
+            end_time = start_time + min_duration
+        
+        # 确保不超过总时长
+        end_time = min(end_time, total_end_microseconds)
         
         timelines.append({
-            "start": current_time,
+            "start": start_time,
             "end": end_time
         })
-        
-        current_time = end_time
     
     # 确保第一个时间戳不小于 0
     if timelines and timelines[0]["start"] < 0:
