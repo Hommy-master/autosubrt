@@ -538,9 +538,13 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
     total_end_microseconds = valid_timestamps[-1][1] * 1000
     total_duration = total_end_microseconds - total_start_microseconds
     
+    logger.info(f"Total audio duration: {total_duration} microseconds ({total_duration/1000000:.2f} seconds)")
+    
     # 计算每个文本片段的相对长度比例
     text_lengths = [len(text) for text in texts]
     total_text_length = sum(text_lengths)
+    
+    logger.info(f"Total text length: {total_text_length} characters, number of segments: {len(texts)}")
     
     if total_text_length == 0:
         return [{"start": 0, "end": 30000000}]
@@ -553,6 +557,11 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
         # 计算该文本片段应该占用的时间比例
         duration_ratio = length / total_text_length
         segment_duration = int(total_duration * duration_ratio)
+        
+        # 确保每个片段至少有最小持续时间（50ms = 50000 微秒）
+        min_duration = 50000  # 50ms 最小持续时间
+        if segment_duration < min_duration:
+            segment_duration = min_duration
         
         #确保不会超出总时长
         if i == len(texts) - 1:
