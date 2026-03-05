@@ -518,17 +518,25 @@ def split_text_by_length(text: str, max_length: int) -> list[str]:
     return [s for s in result if s]
 
 def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], total_asr_length: int) -> list[dict]:
-    """将时间戳分配给文本片段（时间单位：微秒）"""
+    """将时间戳分配给文本片段（时间单位：微秒）
+    
+    FunASR paraformer-zh 返回的时间戳单位是毫秒（ms）
+    需要将毫秒转换为微秒：毫秒 * 1000
+    """
     if not texts or not timestamps:
-        return [{"start": 0, "end": 30000000}]  # 30秒 = 30,000,000微秒
+        return [{"start": 0, "end": 30000000}]  # 30 秒 = 30,000,000 微秒
     
     #过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
     if not valid_timestamps:
         return [{"start": 0, "end": 30000000}]
     
+    # 将毫秒转换为微秒：毫秒 * 1000
+    
     # 计算总的音频时长（转换为微秒）
-    total_duration = (valid_timestamps[-1][1] - valid_timestamps[0][0]) * 1000
+    total_start_microseconds = valid_timestamps[0][0] * 1000
+    total_end_microseconds = valid_timestamps[-1][1] * 1000
+    total_duration = total_end_microseconds - total_start_microseconds
     
     # 计算每个文本片段的相对长度比例
     text_lengths = [len(text) for text in texts]
@@ -539,7 +547,7 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
     
     #按比例分配时间
     timelines = []
-    current_time = valid_timestamps[0][0] * 1000  # 从第一个时间戳开始（转换为微秒）
+    current_time = total_start_microseconds  # 从第一个时间戳开始（已转换为微秒）
     
     for i, (text, length) in enumerate(zip(texts, text_lengths)):
         # 计算该文本片段应该占用的时间比例
@@ -549,9 +557,9 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
         #确保不会超出总时长
         if i == len(texts) - 1:
             # 最后一个片段，确保结束时间正确
-            end_time = valid_timestamps[-1][1] * 1000
+            end_time = total_end_microseconds
         else:
-            end_time = min(current_time + segment_duration, valid_timestamps[-1][1] * 1000)
+            end_time = min(current_time + segment_duration, total_end_microseconds)
         
         timelines.append({
             "start": current_time,
@@ -559,12 +567,8 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
         })
         
         current_time = end_time
-        
-        # 添加小的间隔避免时间重叠（100ms = 100,000微秒）
-        if current_time < valid_timestamps[-1][1] * 1000 and i < len(texts) - 1:
-            current_time += 100000  # 100ms间隔
     
-    # 确保第一个时间戳不小于0
+    # 确保第一个时间戳不小于 0
     if timelines and timelines[0]["start"] < 0:
         offset = -timelines[0]["start"]
         for timeline in timelines:
@@ -730,10 +734,9 @@ def merge_timestamps_for_original_sentences(texts: list[str], sentence_mapping: 
         first_text_idx = group_indices[0]
         last_text_idx = group_indices[-1]
         
-        # 将帧转换为微秒：帧数 / 300 * 1000000
-        frame_rate = 300  # FunASR paraformer-zh 的帧率
-        group_start_time = int(expanded_timestamps[first_text_idx][0] / frame_rate * 1000000)
-        group_end_time = int(expanded_timestamps[last_text_idx][1] / frame_rate * 1000000)
+        # 将毫秒转换为微秒：毫秒 * 1000
+        group_start_time = expanded_timestamps[first_text_idx][0] * 1000
+        group_end_time = expanded_timestamps[last_text_idx][1] * 1000
         
         # 计算该组的总时长
         group_duration = group_end_time - group_start_time
