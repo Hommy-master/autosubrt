@@ -6,6 +6,7 @@ import helper
 import pysrt
 import config
 import os
+import re
 
 
 # 加载模型（只加载一次）
@@ -401,19 +402,26 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
             # 如果没有有效的时间戳，返回默认结果
             return [text], [{"start": 0, "end": 30000000}]  # 30秒 = 30,000,000微秒
         
-        # 4. 根据文本中的标点符号分割句子
-        sentences = split_text_by_punctuation(text)
+        # 4. 根据文本中的标点符号分割句子（移除标点符号）
+        sentences = split_text_by_punctuation_without_symbols(text)
         
-        # 5. 根据最大字符数进一步分割长句子
+        # 5. 根据最大字符数进一步分割长句子（确保无标点符号）
         final_texts = []
         for sentence in sentences:
-            if len(sentence) <= max_chars_per_line:
-                final_texts.append(sentence)
-            else:
-                # 按最大字符数分割
-                chunks = split_text_by_length(sentence, max_chars_per_line)
-                final_texts.extend(chunks)
-        
+            # 再次确保句子中没有标点符号
+            clean_sentence = re.sub(r'[。！？，；.!?,;:\n\r]', '', sentence).strip()
+            if clean_sentence:  # 只处理非空句子
+                if len(clean_sentence) <= max_chars_per_line:
+                    final_texts.append(clean_sentence)
+                else:
+                    # 按最大字符数分割
+                    chunks = split_text_by_length(clean_sentence, max_chars_per_line)
+                    # 确保每个片段都没有标点符号
+                    for chunk in chunks:
+                        clean_chunk = re.sub(r'[。！？，；.!?,;:\n\r]', '', chunk).strip()
+                        if clean_chunk:
+                            final_texts.append(clean_chunk)
+
         # 6. 将时间戳分配给文本片段
         timelines = distribute_timestamps_to_texts(final_texts, timestamps, len(asr_text))
         
