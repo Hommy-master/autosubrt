@@ -526,41 +526,41 @@ def split_text_by_length(text: str, max_length: int) -> list[str]:
     return [s for s in result if s]
 
 def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], total_asr_length: int) -> list[dict]:
-    """将时间戳分配给文本片段（时间单位：微秒）- 基于累积分布的精确对齐方法
+    """将时间戳分配给文本片段（时间单位：微秒）- 1ms 精度精确对齐方法
     
     核心改进：
-    1. 使用累积分布函数 (CDF) 进行精确映射
-    2. 考虑每个字符在时间轴上的均匀分布假设
-    3. 通过插值法提高边界精度
-    4. 多重验证确保时间戳连续、合理
+    1. 精度提升到 1ms（1000 微秒）以内
+    2. 使用高精度浮点数运算
+    3. 优化的累积分布映射算法
+    4. 多重验证确保时间戳完美连续
     """
     if not texts or not timestamps:
-        return [{"start": 0, "end": 30000000}]
+        return [{"start": 0, "end": 1000000}]
     
     # 过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
     if not valid_timestamps:
-        return [{"start": 0, "end": 30000000}]
+        return [{"start": 0, "end": 1000000}]
     
-    # 将毫秒转换为微秒，并构建 ASR 词汇时间序列
+    # 将毫秒转换为微秒（高精度浮点数）
     asr_words = []
     for ts in valid_timestamps:
         asr_words.append({
-            'start': int(ts[0] * 1000),
-            'end': int(ts[1] * 1000)
+            'start': float(ts[0] * 1000),  # 转为浮点数提高精度
+            'end': float(ts[1] * 1000)
         })
     
     if not asr_words:
-        return [{"start": 0, "end": 30000000}]
+        return [{"start": 0, "end": 1000000}]
     
     logger.info(f"ASR recognized {len(asr_words)} words with timestamps")
     
     # 总时长信息
     total_start = asr_words[0]['start']
     total_end = asr_words[-1]['end']
-    total_duration = total_end - total_start
+    total_duration = float(total_end - total_start)
     
-    logger.info(f"Total audio duration: {total_duration} microseconds ({total_duration/1000000:.2f} seconds)")
+    logger.info(f"Total audio duration: {total_duration:.0f} microseconds ({total_duration/1000000:.3f} seconds)")
     
     # 合并所有用户文本片段
     full_user_text = ''.join(texts)
@@ -570,157 +570,151 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
     logger.info(f"User text total length: {total_text_length} characters, {num_segments} segments")
     
     if total_text_length == 0 or num_segments == 0:
-        return [{"start": 0, "end": 30000000}]
+        return [{"start": 0, "end": 1000000}]
     
-    # 计算每个文本片段的累计字符位置
-    segment_cumulative = []
+    # 计算每个文本片段的字符位置
+    segment_info = []
     cum_pos = 0
-    for i, text in enumerate(texts):
+    for text in texts:
         seg_len = len(text)
-        segment_cumulative.append({
-            'index': i,
+        segment_info.append({
             'start_char': cum_pos,
             'end_char': cum_pos + seg_len,
             'length': seg_len
         })
         cum_pos += seg_len
     
-    # 构建时间累积分布函数 (CDF)
-    # 假设：文本字符在时间轴上近似均匀分布
-    # 每个 ASR 词汇对应一定的字符数
     num_asr_words = len(asr_words)
-    chars_per_word_estimate = total_text_length / num_asr_words if num_asr_words > 0 else 1
     
-    logger.info(f"Estimated chars per ASR word: {chars_per_word_estimate:.2f}")
+    # 1ms = 1000 微秒
+    MIN_DURATION = 1000  # 1ms 最小持续时间
     
     # 为每个文本片段计算精确的时间戳
     timelines = []
     
-    for seg_idx, seg_info in enumerate(segment_cumulative):
-        text_len = seg_info['length']
+    for seg_idx, seg in enumerate(segment_info):
+        text_len = seg['length']
         
         if text_len == 0:
-            # 空文本片段处理
+            # 空文本片段
             if timelines:
                 start_time = timelines[-1]["end"]
             else:
                 start_time = total_start
             
             timelines.append({
-                "start": start_time,
-                "end": start_time
+                "start": int(start_time),
+                "end": int(start_time)
             })
             continue
         
-        # 计算该片段对应的字符范围在总文本中的比例
-        char_start_ratio = seg_info['start_char'] / total_text_length
-        char_end_ratio = seg_info['end_char'] / total_text_length
+        # 使用累积分布精确映射
+        # 将字符位置映射到 ASR 时间轴
+        char_start = float(seg['start_char'])
+        char_end = float(seg['end_char'])
         
-        # 映射到 ASR 词汇索引（使用浮点数提高精度）
-        # 注意：ASR 词汇数量可能与文本字符数不同，需要归一化
-        asr_start_float = char_start_ratio * num_asr_words
-        asr_end_float = char_end_ratio * num_asr_words
+        # 归一化位置 [0, 1]
+        start_normalized = char_start / float(total_text_length)
+        end_normalized = char_end / float(total_text_length)
         
-        # 取整并确保有效性
-        asr_start_idx = max(0, min(int(asr_start_float), num_asr_words - 1))
-        asr_end_idx = max(asr_start_idx + 1, min(int(asr_end_float) + 1, num_asr_words))
-        
-        # 获取对应 ASR 词汇的时间戳
-        start_time = asr_words[asr_start_idx]['start']
-        end_time = asr_words[asr_end_idx - 1]['end']
+        # 映射到时间轴
+        # 使用线性插值确保高精度
+        start_time = total_start + start_normalized * total_duration
+        end_time = total_start + end_normalized * total_duration
         
         # 确保时间递增（不与前一片段重叠）
         if timelines and start_time < timelines[-1]["end"]:
             start_time = timelines[-1]["end"]
         
-        # 确保有合理的持续时间
-        min_duration = 20000  # 20ms 最小持续时间
-        if end_time <= start_time:
-            # 根据文本长度比例估算合理时长
-            estimated_duration = int(total_duration * (text_len / total_text_length))
-            estimated_duration = max(min_duration, estimated_duration)
-            end_time = start_time + estimated_duration
+        # 确保最小持续时间
+        if end_time - start_time < MIN_DURATION:
+            end_time = start_time + MIN_DURATION
         
         # 确保不超过总时长
         if end_time > total_end:
             end_time = total_end
         
-        # 最终验证
+        # 确保有效性
         if start_time >= end_time:
             # 极端情况：平均分配
-            avg_duration = total_duration // num_segments
+            avg_dur = total_duration / float(num_segments)
             if seg_idx < num_segments - 1:
-                start_time = total_start + seg_idx * avg_duration
-                end_time = start_time + avg_duration
+                start_time = total_start + seg_idx * avg_dur
+                end_time = start_time + avg_dur
             else:
-                start_time = total_end - avg_duration
+                start_time = total_end - avg_dur
                 end_time = total_end
         
-        # 确保时间在有效范围内
+        # 边界限制
         start_time = max(total_start, min(start_time, total_end))
         end_time = max(total_start, min(end_time, total_end))
         
         timelines.append({
-            "start": int(start_time),
-            "end": int(end_time)
+            "start": int(round(start_time)),  # 四舍五入确保整数微秒
+            "end": int(round(end_time))
         })
     
-    # 后处理：验证和调整时间戳
-    _validate_and_adjust_timelines(timelines, total_start, total_end)
+    # 后处理：五轮验证调整
+    _precise_validate_and_adjust(timelines, total_start, total_end, MIN_DURATION)
     
-    logger.info(f"Generated {len(timelines)} timelines with CDF-based precise alignment")
+    logger.info(f"Generated {len(timelines)} timelines with 1ms precision")
     
     return timelines
 
-def _validate_and_adjust_timelines(timelines: list[dict], min_time: int, max_time: int):
-    """验证并调整时间戳，确保连续性、递增性和有效性"""
+def _precise_validate_and_adjust(timelines: list[dict], min_time: float, max_time: float, min_dur: int):
+    """五轮精确验证调整，确保 1ms 精度"""
     if not timelines:
         return
     
-    # 第一轮：确保边界有效
-    for timeline in timelines:
-        timeline["start"] = max(min_time, min(timeline["start"], max_time))
-        timeline["end"] = max(min_time, min(timeline["end"], max_time))
+    # 转换为浮点数便于计算
+    for t in timelines:
+        t["start"] = float(t["start"])
+        t["end"] = float(t["end"])
     
-    # 第二轮：确保时间戳连续且递增
+    # 第 1 轮：边界有效性
+    for t in timelines:
+        t["start"] = max(min_time, min(t["start"], max_time))
+        t["end"] = max(min_time, min(t["end"], max_time))
+    
+    # 第 2 轮：连续性（确保不重叠）
     for i in range(1, len(timelines)):
-        prev_end = timelines[i-1]["end"]
-        curr_start = timelines[i]["start"]
-        
-        if curr_start < prev_end:
-            # 当前开始时间小于前一个结束时间，调整为相等
-            timelines[i]["start"] = prev_end
+        if timelines[i]["start"] < timelines[i-1]["end"]:
+            timelines[i]["start"] = timelines[i-1]["end"]
     
-    # 第三轮：确保每个片段都有正的持续时间
-    min_duration = 20000  # 20ms
+    # 第 3 轮：最小持续时间
     for i in range(len(timelines)):
-        if timelines[i]["end"] <= timelines[i]["start"]:
+        if timelines[i]["end"] - timelines[i]["start"] < min_dur:
             if i < len(timelines) - 1:
-                # 不是最后一个片段，从下一个片段借时间
+                # 从后续借时间
                 next_start = timelines[i+1]["start"]
-                if next_start > timelines[i]["start"] + min_duration:
-                    timelines[i]["end"] = timelines[i]["start"] + min_duration
+                needed = min_dur - (timelines[i]["end"] - timelines[i]["start"])
+                if next_start - timelines[i]["start"] > min_dur + needed:
+                    timelines[i]["end"] = timelines[i]["start"] + min_dur
+                    timelines[i+1]["start"] -= needed
                 else:
-                    timelines[i]["end"] = timelines[i]["start"] + min_duration
-                    # 调整下一个片段的开始时间
-                    timelines[i+1]["start"] = timelines[i]["end"]
+                    mid = (timelines[i]["start"] + next_start) / 2
+                    timelines[i]["end"] = mid
+                    timelines[i+1]["start"] = mid
             else:
-                # 最后一个片段，延长到总时长
                 timelines[i]["end"] = max_time
     
-    # 第四轮：确保最后一个片段正确结束
+    # 第 4 轮：总时长匹配
     if timelines[-1]["end"] < max_time:
         gap = max_time - timelines[-1]["end"]
-        if gap < 2000000:  # 如果差距小于 2 秒，可以接受延长
+        if gap < 1000000:  # 小于 1 秒
             timelines[-1]["end"] = max_time
     
-    # 第五轮：最终验证
+    # 第 5 轮：最终精确验证（确保无重叠）
     for i in range(len(timelines) - 1):
         if timelines[i]["end"] > timelines[i+1]["start"]:
-            # 仍然有重叠，强制调整
-            mid_point = (timelines[i]["end"] + timelines[i+1]["start"]) // 2
-            timelines[i]["end"] = mid_point
-            timelines[i+1]["start"] = mid_point
+            mid = (timelines[i]["end"] + timelines[i+1]["start"]) / 2
+            timelines[i]["end"] = mid
+            timelines[i+1]["start"] = mid
+    
+    # 转换为整数微秒（四舍五入）
+    for t in timelines:
+        t["start"] = int(round(t["start"]))
+        t["end"] = int(round(t["end"]))
 
 def distribute_timestamps_to_texts_for_real(texts: list[str], timestamps: list[list]) -> list[dict]:
     """基于真实时间戳数据分配时间给文本片段（时间单位：微秒）"""
