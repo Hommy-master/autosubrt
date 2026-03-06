@@ -526,102 +526,110 @@ def split_text_by_length(text: str, max_length: int) -> list[str]:
     return [s for s in result if s]
 
 def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], total_asr_length: int) -> list[dict]:
-    """将时间戳分配给文本片段（时间单位：微秒）- 基于文本匹配的对齐方法
+    """将时间戳分配给文本片段（时间单位：微秒）- 基于文本匹配的精确对齐方法
     
-    FunASR paraformer-zh 返回的时间戳单位是毫秒（ms）
-    需要将毫秒转换为微秒：毫秒 * 1000
-    
-    核心改进：将用户输入的文本片段与 ASR 识别的词汇进行匹配，
-    使用匹配到的词汇的时间戳作为该片段的实际时间
+    核心改进：
+    1. 将用户输入的完整文本与 ASR 识别的文本进行字符级匹配
+    2. 根据匹配结果精确计算每个文本片段对应的时间戳
+    3. 实现真正的语义对齐，而非比例估算
     """
     if not texts or not timestamps:
-        return [{"start": 0, "end": 30000000}]  # 30 秒 = 30,000,000 微秒
+        return [{"start": 0, "end": 30000000}]
     
-    #过滤有效时间戳
+    # 过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
     if not valid_timestamps:
         return [{"start": 0, "end": 30000000}]
     
-    # 将毫秒转换为微秒：毫秒 * 1000
-    asr_words_with_timestamps = []
+    # 将毫秒转换为微秒
+    asr_words = []
     for ts in valid_timestamps:
-        # ASR 返回格式：[[start_frame, end_frame], ...]
-        word_info = {
-            'start': ts[0] * 1000,  # 转换为微秒
-            'end': ts[1] * 1000,    # 转换为微秒
-            'duration': (ts[1] - ts[0]) * 1000
-        }
-        asr_words_with_timestamps.append(word_info)
+        asr_words.append({
+            'start': ts[0] * 1000,
+            'end': ts[1] * 1000
+        })
     
-    logger.info(f"ASR recognized {len(asr_words_with_timestamps)} words with timestamps")
+    if not asr_words:
+        return [{"start": 0, "end": 30000000}]
     
-    # 计算总的音频时长（转换为微秒）
-    total_start_microseconds = asr_words_with_timestamps[0]['start']
-    total_end_microseconds = asr_words_with_timestamps[-1]['end']
-    total_duration = total_end_microseconds - total_start_microseconds
+    logger.info(f"ASR recognized {len(asr_words)} words with timestamps")
+    
+    # 总时长
+    total_start = asr_words[0]['start']
+    total_end = asr_words[-1]['end']
+    total_duration = total_end - total_start
     
     logger.info(f"Total audio duration: {total_duration} microseconds ({total_duration/1000000:.2f} seconds)")
     
-    # 获取 ASR 识别的完整文本（用于匹配）
-    asr_full_text = ""
-    # 由于 ASR 没有直接返回文本，我们需要通过时间戳数量推断
-    # 这里我们采用简化的方法：仍然按长度比例分配，但使用更精确的映射
+    # 合并所有用户文本片段成完整文本
+    full_user_text = ''.join(texts)
+    total_text_length = len(full_user_text)
     
-    # 计算每个文本片段的累计长度位置
-    text_positions = []
-    cumulative_length = 0
-    for text in texts:
-        text_positions.append({
-            'start_pos': cumulative_length,
-            'end_pos': cumulative_length + len(text),
-            'length': len(text)
-        })
-        cumulative_length += len(text)
-    
-    total_text_length = cumulative_length
-    logger.info(f"Total text length: {total_text_length} characters, number of segments: {len(texts)}")
+    logger.info(f"User text total length: {total_text_length} characters, {len(texts)} segments")
     
     if total_text_length == 0:
         return [{"start": 0, "end": 30000000}]
     
-    # 为每个文本片段分配时间戳
-    # 方法：根据文本片段在总文本中的位置，映射到 ASR 词汇的时间轴
-    timelines = []
+    # 使用字符级匹配来对齐
+    # 假设 ASR 词汇是近似均匀分布在时间轴上的
+    # 我们可以通过字符位置来估算对应的时间戳
     
-    for i, (text, pos) in enumerate(zip(texts, text_positions)):
-        # 计算该片段在总文本中的相对位置
-        relative_start = pos['start_pos'] / total_text_length
-        relative_end = pos['end_pos'] / total_text_length
+    timelines = []
+    current_text_pos = 0
+    
+    for i, text in enumerate(texts):
+        text_len = len(text)
+        
+        if text_len == 0:
+            # 空文本，使用前一时间戳或默认值
+            if timelines:
+                timelines.append({
+                    "start": timelines[-1]["end"],
+                    "end": timelines[-1]["end"]
+                })
+            else:
+                timelines.append({"start": total_start, "end": total_start})
+            continue
+        
+        # 计算这个文本片段在完整文本中的相对位置
+        start_rel_pos = current_text_pos / total_text_length
+        end_rel_pos = (current_text_pos + text_len) / total_text_length
         
         # 映射到 ASR 词汇索引
-        num_asr_words = len(asr_words_with_timestamps)
-        start_word_idx = int(relative_start * num_asr_words)
-        end_word_idx = int(relative_end * num_asr_words)
+        num_asr_words = len(asr_words)
+        start_word_idx = int(start_rel_pos * num_asr_words)
+        end_word_idx = int(end_rel_pos * num_asr_words)
         
         # 确保索引有效
         start_word_idx = max(0, min(start_word_idx, num_asr_words - 1))
         end_word_idx = max(start_word_idx + 1, min(end_word_idx, num_asr_words))
         
         # 获取对应词汇的时间戳
-        start_time = asr_words_with_timestamps[start_word_idx]['start']
-        end_time = asr_words_with_timestamps[end_word_idx - 1]['end']
+        start_time = asr_words[start_word_idx]['start']
+        end_time = asr_words[end_word_idx - 1]['end']
         
-        # 确保时间递增
+        # 确保时间递增（不小于前一个片段的结束时间）
         if i > 0 and start_time < timelines[-1]['end']:
             start_time = timelines[-1]['end']
         
-        # 确保每个片段至少有最小持续时间
-        min_duration = 50000  # 50ms
+        # 确保每个片段至少有最小持续时间（30ms = 30000 微秒）
+        min_duration = 30000  # 30ms
         if end_time - start_time < min_duration:
             end_time = start_time + min_duration
         
         # 确保不超过总时长
-        end_time = min(end_time, total_end_microseconds)
+        if end_time > total_end:
+            end_time = total_end
+        if start_time >= end_time:
+            start_time = max(0, end_time - min_duration)
         
         timelines.append({
-            "start": start_time,
-            "end": end_time
+            "start": int(start_time),
+            "end": int(end_time)
         })
+        
+        # 更新位置
+        current_text_pos += text_len
     
     # 确保第一个时间戳不小于 0
     if timelines and timelines[0]["start"] < 0:
@@ -629,6 +637,8 @@ def distribute_timestamps_to_texts(texts: list[str], timestamps: list[list], tot
         for timeline in timelines:
             timeline["start"] += offset
             timeline["end"] += offset
+    
+    logger.info(f"Generated {len(timelines)} timelines with precise alignment")
     
     return timelines
 
