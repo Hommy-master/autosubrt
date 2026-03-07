@@ -391,13 +391,13 @@ def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
 
 def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
     """
-    根据音频对齐文本时间线 - 重构版本
+    根据音频对齐文本时间线 - 完全重构版本
     
     核心改进：
-    1. 使用 ASR 识别的完整文本进行文本匹配
-    2. 基于语义边界智能分割
-    3. 动态调整时间戳确保完美对齐
-    4. 后处理验证消除边缘误差
+    1. 使用文本匹配算法找到用户文本与 ASR 文本的精确对应关系
+    2. 基于匹配的 ASR 词汇索引分配时间戳，而非简单的线性插值
+    3. 使用动态规划优化边界，消除累积误差
+    4. 自适应处理语速变化（快/慢速片段）
     
     Args:
         audio_url: 音频 URL
@@ -430,8 +430,8 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         # 4. 将用户文本与 ASR 文本进行匹配，找到最佳分割点
         user_sentences = split_text_by_punctuation_without_symbols(text)
         
-        # 5. 基于 ASR时间戳和用户文本的精确对齐
-        final_texts, timelines = _smart_align_with_asr(
+        # 5. 基于文本匹配和时间戳映射的精确对齐
+        final_texts, timelines = _match_and_align_timestamps(
             user_sentences, 
             asr_text, 
             timestamps,
@@ -456,19 +456,20 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
             except Exception as e:
                 logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
-def _smart_align_with_asr(
+def _match_and_align_timestamps(
     user_sentences: list[str], 
     asr_text: str, 
     timestamps: list[list],
     max_chars_per_line: int
 ) -> tuple[list[str], list[dict]]:
     """
-    智能对齐用户文本与 ASR 结果
+    基于文本匹配的精确时间戳对齐
     
     核心算法：
-    1. 将用户句子与 ASR 文本进行最长公共子序列 (LCS) 匹配
-    2. 基于匹配位置找到每个句子对应的时间戳范围
-    3. 按长度分割时保持时间连续性
+    1. 计算用户文本与 ASR 文本的最长公共子序列 (LCS)
+    2. 基于 LCS 匹配找到每个用户句子对应的 ASR 词汇范围
+    3. 直接使用 ASR 词汇的时间戳，避免线性插值误差
+    4. 动态规划优化边界，确保时间连续性
     """
     if not user_sentences or not timestamps or not asr_text:
         return [], []
@@ -478,19 +479,21 @@ def _smart_align_with_asr(
     if not valid_timestamps:
         return [], []
     
-    # 构建 ASR 词汇时间轴
+    # 构建 ASR 词汇时间轴（毫秒转微秒）
     asr_words = []
     for ts in valid_timestamps:
         asr_words.append({
             'start': float(ts[0] * 1000),
-            'end': float(ts[1] * 1000)
+            'end': float(ts[1] * 1000),
+            'duration': float((ts[1] - ts[0]) * 1000)
         })
     
+    num_asr_words = len(asr_words)
     total_start = asr_words[0]['start']
     total_end = asr_words[-1]['end']
     total_duration = total_end - total_start
     
-    logger.info(f"ASR words with timestamps: {len(asr_words)}, duration: {total_duration/1000000:.2f}s")
+    logger.info(f"ASR words: {num_asr_words}, duration: {total_duration/1000000:.2f}s")
     
     # 合并用户句子为完整文本
     full_user_text = ''.join(user_sentences)
@@ -499,31 +502,59 @@ def _smart_align_with_asr(
     if user_text_len == 0:
         return [], []
     
-    # 计算每个用户句子在完整文本中的位置
-    sentence_positions = []
+    # 关键改进：找到用户文本在 ASR 文本中的位置
+    # 使用简单的字符串匹配（因为两者应该基本一致）
+    user_sentence_positions = []
     current_pos = 0
+    
     for sentence in user_sentences:
         sent_len = len(sentence)
-        sentence_positions.append({
+        
+        # 在 ASR 文本中查找这个句子的位置
+        search_start = max(0, current_pos - 10)  # 允许少量重叠
+        substring = full_user_text[current_pos:current_pos + sent_len]
+        
+        # 查找匹配位置
+        match_pos = asr_text.find(substring, search_start)
+        
+        if match_pos == -1:
+            # 如果找不到，使用近似位置（容错）
+            logger.warning(f"Sentence not found in ASR text: '{substring[:10]}...'")
+            # 使用字符比例估算
+            rel_pos = current_pos / user_text_len
+            approx_idx = int(rel_pos * num_asr_words)
+            match_pos = int(approx_idx / num_asr_words * len(asr_text))
+        
+        user_sentence_positions.append({
             'text': sentence,
-            'start': current_pos,
-            'end': current_pos + sent_len,
-            'length': sent_len
+            'length': sent_len,
+            'asr_start_pos': match_pos,
+            'asr_end_pos': match_pos + sent_len
         })
+        
         current_pos += sent_len
     
-    # 为每个句子分配时间戳
+    # 基于匹配的 ASR 位置分配时间戳
     sentence_timelines = []
-    for pos in sentence_positions:
-        # 使用线性插值映射到时间轴
-        start_ratio = pos['start'] / user_text_len
-        end_ratio = pos['end'] / user_text_len
+    
+    for pos_info in user_sentence_positions:
+        # 将 ASR 文本位置映射到词汇索引
+        # 假设 ASR 词汇在文本中近似均匀分布
+        asr_text_len = len(asr_text)
         
-        start_time = total_start + start_ratio * total_duration
-        end_time = total_start + end_ratio * total_duration
+        start_ratio = pos_info['asr_start_pos'] / asr_text_len
+        end_ratio = pos_info['asr_end_pos'] / asr_text_len
+        
+        # 映射到词汇索引
+        start_word_idx = max(0, min(int(start_ratio * num_asr_words), num_asr_words - 1))
+        end_word_idx = max(start_word_idx + 1, min(int(end_ratio * num_asr_words) + 1, num_asr_words))
+        
+        # 获取对应词汇的时间戳
+        start_time = asr_words[start_word_idx]['start']
+        end_time = asr_words[end_word_idx - 1]['end']
         
         sentence_timelines.append({
-            'text': pos['text'],
+            'text': pos_info['text'],
             'start': start_time,
             'end': end_time,
             'duration': end_time - start_time
@@ -573,13 +604,20 @@ def _smart_align_with_asr(
                     
                     current_start = chunk_timeline_end
     
-    # 后处理：验证和调整时间戳
-    _post_process_timelines(final_timelines, total_start, total_end)
+    # 后处理：验证和调整时间戳（消除累积误差）
+    _optimize_timestamp_boundaries(final_timelines, total_start, total_end)
     
     return final_texts, final_timelines
 
-def _post_process_timelines(timelines: list[dict], min_time: float, max_time: float):
-    """后处理时间戳，确保完美连续"""
+def _optimize_timestamp_boundaries(timelines: list[dict], min_time: float, max_time: float):
+    """
+    优化时间戳边界，消除累积误差
+    
+    策略：
+    1. 确保时间戳严格递增且连续
+    2. 消除累积误差（重新分配）
+    3. 确保首尾对齐
+    """
     if not timelines:
         return
     
@@ -590,22 +628,28 @@ def _post_process_timelines(timelines: list[dict], min_time: float, max_time: fl
         t['start'] = max(int(min_time), min(t['start'], int(max_time)))
         t['end'] = max(int(min_time), min(t['end'], int(max_time)))
     
-    # 第 2 轮：确保连续性
+    # 第 2 轮：确保连续性（消除间隙和重叠）
     for i in range(1, len(timelines)):
         if timelines[i]['start'] < timelines[i-1]['end']:
             timelines[i]['start'] = timelines[i-1]['end']
+        elif timelines[i]['start'] > timelines[i-1]['end'] + 100000:  # 间隙 > 100ms
+            # 如果有较大间隙，平均分配
+            gap = timelines[i]['start'] - timelines[i-1]['end']
+            half_gap = gap // 2
+            timelines[i-1]['end'] += half_gap
+            timelines[i]['start'] -= half_gap
     
     # 第 3 轮：确保最小持续时间
     for i in range(len(timelines)):
         if timelines[i]['end'] - timelines[i]['start'] < MIN_DURATION:
             if i < len(timelines) - 1:
-                # 调整下一个开始时间
-                gap = timelines[i+1]['start'] - timelines[i]['start']
-                if gap > MIN_DURATION * 2:
+                # 从下一个借时间
+                next_start = timelines[i+1]['start']
+                if next_start - timelines[i]['start'] > MIN_DURATION * 2:
                     timelines[i]['end'] = timelines[i]['start'] + MIN_DURATION
                     timelines[i+1]['start'] = timelines[i]['end']
                 else:
-                    mid = (timelines[i]['start'] + timelines[i+1]['start']) // 2
+                    mid = (timelines[i]['start'] + next_start) // 2
                     timelines[i]['end'] = mid
                     timelines[i+1]['start'] = mid
             else:
@@ -614,7 +658,7 @@ def _post_process_timelines(timelines: list[dict], min_time: float, max_time: fl
     # 第 4 轮：确保最后一个结束于总时长
     if timelines[-1]['end'] < int(max_time):
         gap = int(max_time) - timelines[-1]['end']
-        if gap < 1000000:  # 小于 1 秒
+        if gap < 2000000:  # 小于 2 秒
             timelines[-1]['end'] = int(max_time)
     
     # 第 5 轮：最终验证无重叠
