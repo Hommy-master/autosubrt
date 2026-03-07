@@ -391,7 +391,7 @@ def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
 
 def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict], list[dict]]:
     """
-    根据音频对齐文本时间线 - 优化版本
+    根据音频对齐文本时间线
     
     Args:
         audio_url: 音频 URL
@@ -400,40 +400,20 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
     
     Returns:
         tuple: (texts 列表，timelines 列表，char_timelines 字符级时间线列表)
-    
-    Raises:
-        CustomException: 自定义异常
     """
     audio_file = None
     try:
-        # 1. 下载音频文件
-        audio_file = helper.download(audio_url, config.TEMP_DIR)
+        # 1. 下载音频并获取 ASR 结果
+        asr_text, timestamps = _get_asr_result(audio_url, audio_file)
         
-        # 2. 使用模型生成识别结果（获取时间戳）
-        result = model.generate(input=audio_file)
-        
-        # 3. 提取 ASR 结果
-        asr_text, timestamps = extract_asr_result(result)
-        
-        if asr_text is None or not timestamps:
-            logger.warning("No valid ASR result or timestamps")
+        if not asr_text or not timestamps:
             return [text], [{"start": 0, "end": 30000000}], []
         
-        logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
-        
-        # 4. 将用户文本与 ASR 文本进行匹配，找到最佳分割点
+        # 2. 预处理用户文本
         user_sentences = split_text_by_punctuation_without_symbols(text)
         
-        # 5. 基于累积分布函数 (CDF) 的精确对齐
-        final_texts, timelines, char_timelines = _cdf_based_alignment(
-            user_sentences, 
-            timestamps,
-            max_chars_per_line
-        )
-        
-        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines, {len(char_timelines)} char timelines")
-        
-        return final_texts, timelines, char_timelines
+        # 3. 执行时间线对齐
+        return _align_timestamps(user_sentences, timestamps, max_chars_per_line)
         
     except CustomException:
         raise
@@ -441,218 +421,209 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         logger.error(f"Text alignment failed: {str(e)}, detail: {traceback.format_exc()}")
         raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
     finally:
-        # 清理临时音频文件
-        if audio_file and os.path.exists(audio_file):
-            try:
-                os.remove(audio_file)
-                logger.info(f"Temporary audio file cleaned up: {audio_file}")
-            except Exception as e:
-                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
+        _cleanup_audio_file(audio_file)
 
-def _cdf_based_alignment(
+def _get_asr_result(audio_url: str, audio_file: str) -> tuple[str, list[list]]:
+    """下载音频并获取 ASR 识别结果"""
+    audio_file = helper.download(audio_url, config.TEMP_DIR)
+    result = model.generate(input=audio_file)
+    
+    asr_text, timestamps = extract_asr_result(result)
+    logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
+    
+    return asr_text, timestamps
+
+def _align_timestamps(
     user_sentences: list[str], 
     timestamps: list[list],
     max_chars_per_line: int
 ) -> tuple[list[str], list[dict], list[dict]]:
-    """
-    基于累积分布函数 (CDF) 的时间戳对齐 - 优化版本
+    """执行时间线对齐逻辑"""
+    # 生成字符级和句子级时间线
+    char_timelines = _generate_char_timelines(user_sentences, timestamps)
+    sentence_timelines = _generate_sentence_timelines(user_sentences, timestamps)
     
-    核心改进：
-    1. 使用更精确的浮点数运算减少取整误差
-    2. 全局优化时间戳分配，避免局部最优
-    3. 增强的后处理验证机制
-    4. 新增：返回每个字符的时间线
+    # 分割长句子并优化
+    final_texts, final_timelines = _split_and_optimize(
+        sentence_timelines, max_chars_per_line
+    )
     
-    Returns:
-        tuple: (texts 列表，timelines 列表，char_timelines 字符级时间线列表)
-    """
-    if not user_sentences or not timestamps:
-        return [], [], []
+    # 后处理
+    _global_optimize_timelines(final_timelines, char_timelines[0]['start'], char_timelines[-1]['end'])
+    _optimize_char_timelines(char_timelines, char_timelines[0]['start'], char_timelines[-1]['end'])
     
-    # 过滤有效时间戳
+    # 转换为整数微秒
+    _convert_to_microseconds(final_timelines)
+    _convert_to_microseconds(char_timelines)
+    
+    return final_texts, final_timelines, char_timelines
+
+def _generate_char_timelines(user_sentences: list[str], timestamps: list[list]) -> list[dict]:
+    """生成字符级时间线"""
     valid_timestamps = filter_valid_timestamps(timestamps)
-    if not valid_timestamps:
-        return [], [], []
+    if not user_sentences or not valid_timestamps:
+        return []
     
-    # 构建 ASR 词汇时间轴（毫秒转微秒）
+    asr_words = _build_asr_word_timeline(valid_timestamps)
+    full_user_text = ''.join(user_sentences)
+    total_text_length = len(full_user_text)
+    num_asr_words = len(asr_words)
+    
+    char_timelines = []
+    for char_idx in range(total_text_length):
+        char_timeline = _calculate_char_timeline(
+            char_idx, total_text_length, asr_words, num_asr_words, full_user_text
+        )
+        char_timelines.append(char_timeline)
+    
+    return char_timelines
+
+def _calculate_char_timeline(char_idx: int, total_length: int, asr_words: list, num_words: int, full_text: str) -> dict:
+    """计算单个字符的时间线"""
+    char_norm = float(char_idx) / float(max(1, total_length - 1)) if total_length > 1 else 0.5
+    char_float_idx = char_norm * float(num_words - 1)
+    
+    char_start = _interpolate_time(char_float_idx, asr_words, num_words)
+    char_end = _interpolate_time(char_float_idx + 1.0, asr_words, num_words)
+    
+    return {
+        'char': full_text[char_idx],
+        'start': char_start,
+        'end': char_end
+    }
+
+def _generate_sentence_timelines(user_sentences: list[str], timestamps: list[list]) -> list[dict]:
+    """生成句子级时间线"""
+    valid_timestamps = filter_valid_timestamps(timestamps)
+    if not user_sentences or not valid_timestamps:
+        return []
+    
+    asr_words = _build_asr_word_timeline(valid_timestamps)
+    full_user_text = ''.join(user_sentences)
+    total_text_length = len(full_user_text)
+    num_asr_words = len(asr_words)
+    
+    sentence_timelines = []
+    for sentence_idx, sentence in enumerate(user_sentences):
+        timeline = _calculate_sentence_timeline(
+            sentence_idx, sentence, user_sentences, 
+            full_user_text, total_text_length, asr_words, num_asr_words
+        )
+        sentence_timelines.append(timeline)
+    
+    return sentence_timelines
+
+def _build_asr_word_timeline(valid_timestamps: list[list]) -> list[dict]:
+    """构建 ASR 词汇时间轴（毫秒转微秒）"""
     asr_words = []
     for ts in valid_timestamps:
         asr_words.append({
             'start': float(ts[0] * 1000),
             'end': float(ts[1] * 1000)
         })
+    return asr_words
+
+def _calculate_sentence_timeline(sentence_idx, sentence, user_sentences, full_text, total_len, asr_words, num_words):
+    """计算单个句子的时间线"""
+    start_char_idx = sum(len(s) for s in user_sentences[:sentence_idx])
+    end_char_idx = start_char_idx + len(sentence) - 1
     
-    num_asr_words = len(asr_words)
-    total_start = asr_words[0]['start']
-    total_end = asr_words[-1]['end']
-    total_duration = total_end - total_start
+    start_norm = float(start_char_idx) / float(max(1, total_len - 1))
+    end_norm = float(end_char_idx) / float(max(1, total_len - 1))
     
-    logger.info(f"ASR words: {num_asr_words}, duration: {total_duration/1000000:.2f}s")
+    start_time = _interpolate_time(start_norm * float(num_words - 1), asr_words, num_words)
+    end_time = _interpolate_time(end_norm * float(num_words - 1), asr_words, num_words)
     
-    # 合并所有用户句子
-    full_user_text = ''.join(user_sentences)
-    total_text_length = len(full_user_text)
+    return {
+        'text': sentence,
+        'start': start_time,
+        'end': end_time,
+        'length': len(sentence)
+    }
+
+def _interpolate_time(float_idx: float, asr_words: list[dict], num_words: int) -> float:
+    """使用线性插值获取精确时间"""
+    if not asr_words or num_words == 0:
+        return 0
     
-    if total_text_length == 0:
-        return [], [], []
+    # 确保索引在有效范围内
+    float_idx = max(0.0, min(float_idx, float(num_words - 1)))
     
-    # ========== 生成字符级时间线 ==========
-    char_timelines = []
-    for char_idx in range(total_text_length):
-        # 计算该字符的归一化位置
-        if total_text_length > 1:
-            char_norm = float(char_idx) / float(total_text_length - 1)
+    if num_words > 1:
+        floor = int(float_idx)
+        frac = float_idx - floor
+        
+        # 确保不越界
+        if floor >= num_words - 1:
+            floor = num_words - 2
+            frac = 1.0
+        
+        if floor < num_words - 1 and floor >= 0:
+            return (asr_words[floor]['start'] * (1 - frac) + 
+                    asr_words[floor + 1]['start'] * frac)
         else:
-            char_norm = 0.5
-        
-        # 映射到 ASR 词汇索引
-        char_float_idx = char_norm * float(num_asr_words - 1)
-        
-        # 使用线性插值获取精确时间
-        if num_asr_words > 1:
-            char_floor = int(char_float_idx)
-            char_frac = char_float_idx - char_floor
-            
-            if char_floor < num_asr_words - 1:
-                char_start = (asr_words[char_floor]['start'] * (1 - char_frac) + 
-                             asr_words[char_floor + 1]['start'] * char_frac)
-            else:
-                char_start = asr_words[char_floor]['start']
-            
-            # 字符结束时间 = 下一个字符的开始时间（或当前词汇的结束时间）
-            next_char_idx = char_float_idx + 1.0
-            if next_char_idx < num_asr_words - 1:
-                next_floor = int(next_char_idx)
-                next_frac = next_char_idx - next_floor
-                if next_floor < num_asr_words - 1:
-                    char_end = (asr_words[next_floor]['start'] * (1 - next_frac) + 
-                               asr_words[next_floor + 1]['start'] * next_frac)
-                else:
-                    char_end = asr_words[next_floor]['start']
-            else:
-                char_end = asr_words[-1]['end']
-        else:
-            char_start = asr_words[0]['start']
-            char_end = asr_words[0]['end']
-        
-        char_timelines.append({
-            'char': full_user_text[char_idx],
-            'start': int(round(char_start)),
-            'end': int(round(char_end))
-        })
-    
-    # ========== 生成句子级时间线 ==========
-    sentence_timelines = []
-    
-    for sentence_idx, sentence in enumerate(user_sentences):
-        sent_len = len(sentence)
-        
-        # 找到这个句子在完整文本中的起始和结束字符索引
-        start_char_idx = sum(len(s) for s in user_sentences[:sentence_idx])
-        end_char_idx = start_char_idx + sent_len - 1
-        
-        # 计算归一化位置
-        start_norm = float(start_char_idx) / float(max(1, total_text_length - 1))
-        end_norm = float(end_char_idx) / float(max(1, total_text_length - 1))
-        
-        # 映射到 ASR 词汇索引
-        start_float_idx = start_norm * float(num_asr_words - 1)
-        end_float_idx = end_norm * float(num_asr_words - 1)
-        
-        # 获取时间戳（使用线性插值）
-        if num_asr_words > 1:
-            start_floor = int(start_float_idx)
-            start_frac = start_float_idx - start_floor
-            
-            if start_floor < num_asr_words - 1:
-                start_time = (asr_words[start_floor]['start'] * (1 - start_frac) + 
-                             asr_words[start_floor + 1]['start'] * start_frac)
-            else:
-                start_time = asr_words[start_floor]['start']
-            
-            end_floor = int(end_float_idx)
-            end_frac = end_float_idx - end_floor
-            
-            if end_floor < num_asr_words - 1:
-                end_time = (asr_words[end_floor]['start'] * (1 - end_frac) + 
-                           asr_words[end_floor + 1]['start'] * end_frac)
-            else:
-                end_time = asr_words[end_floor]['start']
-        else:
-            start_time = asr_words[0]['start']
-            end_time = asr_words[0]['end']
-        
-        sentence_timelines.append({
-            'text': sentence,
-            'start': start_time,
-            'end': end_time,
-            'length': sent_len
-        })
-    
-    # ========== 进一步分割长句子 ==========
+            return asr_words[max(0, num_words - 1)]['start']
+    else:
+        return asr_words[0]['start']
+
+def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int):
+    """分割长句子并优化时间线"""
     final_texts = []
     final_timelines = []
     
     for sent_info in sentence_timelines:
-        text = sent_info['text']
-        sentence_start = sent_info['start']
-        sentence_end = sent_info['end']
-        sentence_len = sent_info['length']
-        
-        if len(text) <= max_chars_per_line:
-            # 不需要分割
-            final_texts.append(text)
+        if len(sent_info['text']) <= max_chars_per_line:
+            final_texts.append(sent_info['text'])
             final_timelines.append({
-                'start': sentence_start,
-                'end': sentence_end
+                'start': sent_info['start'],
+                'end': sent_info['end']
             })
         else:
-            # 需要分割成多个片段
-            num_chunks = (len(text) + max_chars_per_line - 1) // max_chars_per_line
+            chunks = _split_long_sentence(sent_info, max_chars_per_line)
+            final_texts.extend(chunks['texts'])
+            final_timelines.extend(chunks['timelines'])
+    
+    return final_texts, final_timelines
+
+def _split_long_sentence(sent_info: dict, max_chars: int) -> dict:
+    """分割长句子"""
+    text = sent_info['text']
+    start = sent_info['start']
+    end = sent_info['end']
+    length = len(text)
+    
+    num_chunks = (length + max_chars - 1) // max_chars
+    texts = []
+    timelines = []
+    
+    for i in range(num_chunks):
+        chunk_start = i * max_chars
+        chunk_end = min((i + 1) * max_chars, length)
+        chunk_text = text[chunk_start:chunk_end]
+        
+        if chunk_text.strip():
+            chunk_start_time, chunk_end_time = _calculate_chunk_timeline(
+                i, num_chunks, chunk_start, chunk_end, length, start, end
+            )
             
-            # 为每个片段计算精确的时间戳
-            for i in range(num_chunks):
-                chunk_start_char = i * max_chars_per_line
-                chunk_end_char = min((i + 1) * max_chars_per_line, len(text))
-                
-                # 计算该片段的相对位置
-                if sentence_len > 1:
-                    chunk_rel_start = float(chunk_start_char) / float(sentence_len - 1)
-                    chunk_rel_end = float(chunk_end_char - 1) / float(sentence_len - 1)
-                else:
-                    chunk_rel_start = 0.5
-                    chunk_rel_end = 0.5
-                
-                # 映射到绝对时间
-                chunk_start_time = sentence_start + chunk_rel_start * (sentence_end - sentence_start)
-                
-                if i == num_chunks - 1:
-                    # 最后一个片段，确保结束时间正确
-                    chunk_end_time = sentence_end
-                else:
-                    chunk_end_time = sentence_start + chunk_rel_end * (sentence_end - sentence_start)
-                
-                chunk_text = text[chunk_start_char:chunk_end_char]
-                
-                if chunk_text.strip():
-                    final_texts.append(chunk_text)
-                    final_timelines.append({
-                        'start': chunk_start_time,
-                        'end': chunk_end_time
-                    })
+            texts.append(chunk_text)
+            timelines.append({'start': chunk_start_time, 'end': chunk_end_time})
     
-    # 后处理：全局优化时间戳
-    _global_optimize_timelines(final_timelines, total_start, total_end)
+    return {'texts': texts, 'timelines': timelines}
+
+def _calculate_chunk_timeline(chunk_idx, num_chunks, chunk_start, chunk_end, length, start, end):
+    """计算单个片段的时间线"""
+    if length > 1:
+        chunk_rel_start = float(chunk_start) / float(length - 1)
+        chunk_rel_end = float(chunk_end - 1) / float(length - 1)
+    else:
+        chunk_rel_start = 0.5
+        chunk_rel_end = 0.5
     
-    # 转换为整数微秒
-    for t in final_timelines:
-        t['start'] = int(round(t['start']))
-        t['end'] = int(round(t['end']))
+    chunk_start_time = start + chunk_rel_start * (end - start)
+    chunk_end_time = start + chunk_rel_end * (end - start)
     
-    # 优化字符级时间戳（确保连续性）
-    _optimize_char_timelines(char_timelines, total_start, total_end)
-    
-    return final_texts, final_timelines, char_timelines
+    return chunk_start_time, chunk_end_time
 
 def _optimize_char_timelines(char_timelines: list[dict], min_time: float, max_time: float):
     """优化字符级时间戳，确保连续性和合理性"""
@@ -764,3 +735,18 @@ def _global_optimize_timelines(timelines: list[dict], min_time: float, max_time:
             if durations[i] > avg_duration * 3 or durations[i] < avg_duration * 0.3:
                 # 存在极端不均匀，但不调整（保留原始特征）
                 pass
+
+def _convert_to_microseconds(timelines: list[dict]):
+    """将时间戳转换为整数微秒"""
+    for t in timelines:
+        t['start'] = int(round(t['start']))
+        t['end'] = int(round(t['end']))
+
+def _cleanup_audio_file(audio_file: str):
+    """清理临时音频文件"""
+    if audio_file and os.path.exists(audio_file):
+        try:
+            os.remove(audio_file)
+            logger.info(f"Temporary audio file cleaned up: {audio_file}")
+        except Exception as e:
+            logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
