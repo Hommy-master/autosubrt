@@ -391,13 +391,7 @@ def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
 
 def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
     """
-    根据音频对齐文本时间线 - 完全重构版本
-    
-    核心改进：
-    1. 使用文本匹配算法找到用户文本与 ASR 文本的精确对应关系
-    2. 基于匹配的 ASR 词汇索引分配时间戳，而非简单的线性插值
-    3. 使用动态规划优化边界，消除累积误差
-    4. 自适应处理语速变化（快/慢速片段）
+    根据音频对齐文本时间线 - 优化版本
     
     Args:
         audio_url: 音频 URL
@@ -430,10 +424,9 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         # 4. 将用户文本与 ASR 文本进行匹配，找到最佳分割点
         user_sentences = split_text_by_punctuation_without_symbols(text)
         
-        # 5. 基于文本匹配和时间戳映射的精确对齐
-        final_texts, timelines = _match_and_align_timestamps(
+        # 5. 基于累积分布函数 (CDF) 的精确对齐
+        final_texts, timelines = _cdf_based_alignment(
             user_sentences, 
-            asr_text, 
             timestamps,
             max_chars_per_line
         )
@@ -456,22 +449,21 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
             except Exception as e:
                 logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
-def _match_and_align_timestamps(
+def _cdf_based_alignment(
     user_sentences: list[str], 
-    asr_text: str, 
     timestamps: list[list],
     max_chars_per_line: int
 ) -> tuple[list[str], list[dict]]:
     """
-    基于文本匹配的精确时间戳对齐
+    基于累积分布函数 (CDF) 的时间戳对齐
     
     核心算法：
-    1. 计算用户文本与 ASR 文本的最长公共子序列 (LCS)
-    2. 基于 LCS 匹配找到每个用户句子对应的 ASR 词汇范围
-    3. 直接使用 ASR 词汇的时间戳，避免线性插值误差
-    4. 动态规划优化边界，确保时间连续性
+    1. 合并所有用户句子为完整文本
+    2. 计算每个字符在时间轴上的累积分布位置
+    3. 使用线性插值精确映射到 ASR 词汇时间戳
+    4. 动态优化边界消除累积误差
     """
-    if not user_sentences or not timestamps or not asr_text:
+    if not user_sentences or not timestamps:
         return [], []
     
     # 过滤有效时间戳
@@ -484,8 +476,7 @@ def _match_and_align_timestamps(
     for ts in valid_timestamps:
         asr_words.append({
             'start': float(ts[0] * 1000),
-            'end': float(ts[1] * 1000),
-            'duration': float((ts[1] - ts[0]) * 1000)
+            'end': float(ts[1] * 1000)
         })
     
     num_asr_words = len(asr_words)
@@ -495,69 +486,50 @@ def _match_and_align_timestamps(
     
     logger.info(f"ASR words: {num_asr_words}, duration: {total_duration/1000000:.2f}s")
     
-    # 合并用户句子为完整文本
+    # 合并所有用户句子
     full_user_text = ''.join(user_sentences)
-    user_text_len = len(full_user_text)
+    total_text_length = len(full_user_text)
     
-    if user_text_len == 0:
+    if total_text_length == 0:
         return [], []
     
-    # 关键改进：找到用户文本在 ASR 文本中的位置
-    # 使用简单的字符串匹配（因为两者应该基本一致）
-    user_sentence_positions = []
+    # 计算每个句子的字符位置
+    sentence_positions = []
     current_pos = 0
-    
     for sentence in user_sentences:
         sent_len = len(sentence)
-        
-        # 在 ASR 文本中查找这个句子的位置
-        search_start = max(0, current_pos - 10)  # 允许少量重叠
-        substring = full_user_text[current_pos:current_pos + sent_len]
-        
-        # 查找匹配位置
-        match_pos = asr_text.find(substring, search_start)
-        
-        if match_pos == -1:
-            # 如果找不到，使用近似位置（容错）
-            logger.warning(f"Sentence not found in ASR text: '{substring[:10]}...'")
-            # 使用字符比例估算
-            rel_pos = current_pos / user_text_len
-            approx_idx = int(rel_pos * num_asr_words)
-            match_pos = int(approx_idx / num_asr_words * len(asr_text))
-        
-        user_sentence_positions.append({
+        sentence_positions.append({
             'text': sentence,
-            'length': sent_len,
-            'asr_start_pos': match_pos,
-            'asr_end_pos': match_pos + sent_len
+            'start_char': current_pos,
+            'end_char': current_pos + sent_len,
+            'length': sent_len
         })
-        
         current_pos += sent_len
     
-    # 基于匹配的 ASR 位置分配时间戳
+    # 使用 CDF 方法为每个句子分配时间戳
     sentence_timelines = []
     
-    for pos_info in user_sentence_positions:
-        # 将 ASR 文本位置映射到词汇索引
-        # 假设 ASR 词汇在文本中近似均匀分布
-        asr_text_len = len(asr_text)
+    for pos_info in sentence_positions:
+        # 计算归一化位置 [0, 1]
+        start_normalized = float(pos_info['start_char']) / float(total_text_length)
+        end_normalized = float(pos_info['end_char']) / float(total_text_length)
         
-        start_ratio = pos_info['asr_start_pos'] / asr_text_len
-        end_ratio = pos_info['asr_end_pos'] / asr_text_len
+        # 映射到 ASR 词汇索引（浮点数提高精度）
+        start_float_idx = start_normalized * float(num_asr_words - 1)
+        end_float_idx = end_normalized * float(num_asr_words - 1)
         
-        # 映射到词汇索引
-        start_word_idx = max(0, min(int(start_ratio * num_asr_words), num_asr_words - 1))
-        end_word_idx = max(start_word_idx + 1, min(int(end_ratio * num_asr_words) + 1, num_asr_words))
+        # 取整并确保有效性
+        start_idx = max(0, min(int(start_float_idx), num_asr_words - 1))
+        end_idx = max(start_idx + 1, min(int(end_float_idx) + 1, num_asr_words))
         
         # 获取对应词汇的时间戳
-        start_time = asr_words[start_word_idx]['start']
-        end_time = asr_words[end_word_idx - 1]['end']
+        start_time = asr_words[start_idx]['start']
+        end_time = asr_words[end_idx - 1]['end']
         
         sentence_timelines.append({
             'text': pos_info['text'],
             'start': start_time,
-            'end': end_time,
-            'duration': end_time - start_time
+            'end': end_time
         })
     
     # 进一步分割长句子
@@ -568,7 +540,6 @@ def _match_and_align_timestamps(
         text = sent_info['text']
         start = sent_info['start']
         end = sent_info['end']
-        duration = sent_info['duration']
         
         if len(text) <= max_chars_per_line:
             # 不需要分割
@@ -580,44 +551,44 @@ def _match_and_align_timestamps(
         else:
             # 需要分割成多个片段
             num_chunks = (len(text) + max_chars_per_line - 1) // max_chars_per_line
-            chunk_duration = duration / num_chunks
             
-            current_start = start
+            # 使用 CDF 方法为每个片段分配时间戳
+            chunk_positions = []
             for i in range(num_chunks):
                 chunk_start = i * max_chars_per_line
                 chunk_end = min((i + 1) * max_chars_per_line, len(text))
-                chunk_text = text[chunk_start:chunk_end]
+                chunk_positions.append({
+                    'relative_start': float(chunk_start) / float(len(text)),
+                    'relative_end': float(chunk_end) / float(len(text))
+                })
+            
+            current_start = start
+            for i, chunk_pos in enumerate(chunk_positions):
+                # 计算该片段的绝对时间位置
+                chunk_start_time = start + chunk_pos['relative_start'] * (end - start)
+                
+                if i == num_chunks - 1:
+                    # 最后一个片段，确保结束时间正确
+                    chunk_end_time = end
+                else:
+                    chunk_end_time = start + chunk_pos['relative_end'] * (end - start)
+                
+                chunk_text = text[int(chunk_pos['relative_start'] * len(text)):int(chunk_pos['relative_end'] * len(text))]
                 
                 if chunk_text.strip():
                     final_texts.append(chunk_text)
-                    
-                    if i == num_chunks - 1:
-                        # 最后一个片段，确保结束时间正确
-                        chunk_timeline_end = end
-                    else:
-                        chunk_timeline_end = current_start + chunk_duration
-                    
                     final_timelines.append({
-                        'start': int(round(current_start)),
-                        'end': int(round(chunk_timeline_end))
+                        'start': int(round(chunk_start_time)),
+                        'end': int(round(chunk_end_time))
                     })
-                    
-                    current_start = chunk_timeline_end
     
-    # 后处理：验证和调整时间戳（消除累积误差）
-    _optimize_timestamp_boundaries(final_timelines, total_start, total_end)
+    # 后处理：验证和调整时间戳
+    _adjust_timelines(final_timelines, total_start, total_end)
     
     return final_texts, final_timelines
 
-def _optimize_timestamp_boundaries(timelines: list[dict], min_time: float, max_time: float):
-    """
-    优化时间戳边界，消除累积误差
-    
-    策略：
-    1. 确保时间戳严格递增且连续
-    2. 消除累积误差（重新分配）
-    3. 确保首尾对齐
-    """
+def _adjust_timelines(timelines: list[dict], min_time: float, max_time: float):
+    """后处理时间戳，确保连续性和有效性"""
     if not timelines:
         return
     
@@ -628,22 +599,15 @@ def _optimize_timestamp_boundaries(timelines: list[dict], min_time: float, max_t
         t['start'] = max(int(min_time), min(t['start'], int(max_time)))
         t['end'] = max(int(min_time), min(t['end'], int(max_time)))
     
-    # 第 2 轮：确保连续性（消除间隙和重叠）
+    # 第 2 轮：确保连续性
     for i in range(1, len(timelines)):
         if timelines[i]['start'] < timelines[i-1]['end']:
             timelines[i]['start'] = timelines[i-1]['end']
-        elif timelines[i]['start'] > timelines[i-1]['end'] + 100000:  # 间隙 > 100ms
-            # 如果有较大间隙，平均分配
-            gap = timelines[i]['start'] - timelines[i-1]['end']
-            half_gap = gap // 2
-            timelines[i-1]['end'] += half_gap
-            timelines[i]['start'] -= half_gap
     
     # 第 3 轮：确保最小持续时间
     for i in range(len(timelines)):
         if timelines[i]['end'] - timelines[i]['start'] < MIN_DURATION:
             if i < len(timelines) - 1:
-                # 从下一个借时间
                 next_start = timelines[i+1]['start']
                 if next_start - timelines[i]['start'] > MIN_DURATION * 2:
                     timelines[i]['end'] = timelines[i]['start'] + MIN_DURATION
@@ -658,7 +622,7 @@ def _optimize_timestamp_boundaries(timelines: list[dict], min_time: float, max_t
     # 第 4 轮：确保最后一个结束于总时长
     if timelines[-1]['end'] < int(max_time):
         gap = int(max_time) - timelines[-1]['end']
-        if gap < 2000000:  # 小于 2 秒
+        if gap < 1000000:  # 小于 1 秒
             timelines[-1]['end'] = int(max_time)
     
     # 第 5 轮：最终验证无重叠
