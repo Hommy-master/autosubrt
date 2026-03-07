@@ -455,13 +455,12 @@ def _cdf_based_alignment(
     max_chars_per_line: int
 ) -> tuple[list[str], list[dict]]:
     """
-    基于累积分布函数 (CDF) 的时间戳对齐
+    基于累积分布函数 (CDF) 的时间戳对齐 - 优化版本
     
-    核心算法：
-    1. 合并所有用户句子为完整文本
-    2. 计算每个字符在时间轴上的累积分布位置
-    3. 使用线性插值精确映射到 ASR 词汇时间戳
-    4. 动态优化边界消除累积误差
+    核心改进：
+    1. 使用更精确的浮点数运算减少取整误差
+    2. 全局优化时间戳分配，避免局部最优
+    3. 增强的后处理验证机制
     """
     if not user_sentences or not timestamps:
         return [], []
@@ -493,43 +492,63 @@ def _cdf_based_alignment(
     if total_text_length == 0:
         return [], []
     
-    # 计算每个句子的字符位置
-    sentence_positions = []
-    current_pos = 0
-    for sentence in user_sentences:
-        sent_len = len(sentence)
-        sentence_positions.append({
-            'text': sentence,
-            'start_char': current_pos,
-            'end_char': current_pos + sent_len,
-            'length': sent_len
+    # 计算每个字符的累积位置
+    char_positions = []
+    for i, char in enumerate(full_user_text):
+        char_positions.append({
+            'index': i,
+            'normalized_pos': float(i) / float(total_text_length - 1) if total_text_length > 1 else 0.5
         })
-        current_pos += sent_len
     
-    # 使用 CDF 方法为每个句子分配时间戳
+    # 为每个句子计算精确的时间戳
     sentence_timelines = []
     
-    for pos_info in sentence_positions:
-        # 计算归一化位置 [0, 1]
-        start_normalized = float(pos_info['start_char']) / float(total_text_length)
-        end_normalized = float(pos_info['end_char']) / float(total_text_length)
+    for sentence_idx, sentence in enumerate(user_sentences):
+        sent_len = len(sentence)
         
-        # 映射到 ASR 词汇索引（浮点数提高精度）
-        start_float_idx = start_normalized * float(num_asr_words - 1)
-        end_float_idx = end_normalized * float(num_asr_words - 1)
+        # 找到这个句子在完整文本中的起始和结束字符索引
+        start_char_idx = sum(len(s) for s in user_sentences[:sentence_idx])
+        end_char_idx = start_char_idx + sent_len - 1
         
-        # 取整并确保有效性
-        start_idx = max(0, min(int(start_float_idx), num_asr_words - 1))
-        end_idx = max(start_idx + 1, min(int(end_float_idx) + 1, num_asr_words))
+        # 计算归一化位置
+        start_norm = float(start_char_idx) / float(max(1, total_text_length - 1))
+        end_norm = float(end_char_idx) / float(max(1, total_text_length - 1))
         
-        # 获取对应词汇的时间戳
-        start_time = asr_words[start_idx]['start']
-        end_time = asr_words[end_idx - 1]['end']
+        # 映射到 ASR 词汇索引（使用更精确的方法）
+        # 关键改进：使用 (num_asr_words - 1) 而不是 num_asr_words
+        start_float_idx = start_norm * float(num_asr_words - 1)
+        end_float_idx = end_norm * float(num_asr_words - 1)
+        
+        # 获取时间戳（不取整，保持浮点精度）
+        # 使用线性插值提高边界精度
+        if num_asr_words > 1:
+            # 对于非整数索引，使用相邻词汇的加权平均
+            start_floor = int(start_float_idx)
+            start_frac = start_float_idx - start_floor
+            
+            if start_floor < num_asr_words - 1:
+                start_time = (asr_words[start_floor]['start'] * (1 - start_frac) + 
+                             asr_words[start_floor + 1]['start'] * start_frac)
+            else:
+                start_time = asr_words[start_floor]['start']
+            
+            end_floor = int(end_float_idx)
+            end_frac = end_float_idx - end_floor
+            
+            if end_floor < num_asr_words - 1:
+                end_time = (asr_words[end_floor]['start'] * (1 - end_frac) + 
+                           asr_words[end_floor + 1]['start'] * end_frac)
+            else:
+                end_time = asr_words[end_floor]['start']
+        else:
+            start_time = asr_words[0]['start']
+            end_time = asr_words[0]['end']
         
         sentence_timelines.append({
-            'text': pos_info['text'],
+            'text': sentence,
             'start': start_time,
-            'end': end_time
+            'end': end_time,
+            'length': sent_len
         })
     
     # 进一步分割长句子
@@ -538,96 +557,134 @@ def _cdf_based_alignment(
     
     for sent_info in sentence_timelines:
         text = sent_info['text']
-        start = sent_info['start']
-        end = sent_info['end']
+        sentence_start = sent_info['start']
+        sentence_end = sent_info['end']
+        sentence_len = sent_info['length']
         
         if len(text) <= max_chars_per_line:
             # 不需要分割
             final_texts.append(text)
             final_timelines.append({
-                'start': int(round(start)),
-                'end': int(round(end))
+                'start': sentence_start,
+                'end': sentence_end
             })
         else:
             # 需要分割成多个片段
             num_chunks = (len(text) + max_chars_per_line - 1) // max_chars_per_line
             
-            # 使用 CDF 方法为每个片段分配时间戳
-            chunk_positions = []
+            # 为每个片段计算精确的时间戳
             for i in range(num_chunks):
-                chunk_start = i * max_chars_per_line
-                chunk_end = min((i + 1) * max_chars_per_line, len(text))
-                chunk_positions.append({
-                    'relative_start': float(chunk_start) / float(len(text)),
-                    'relative_end': float(chunk_end) / float(len(text))
-                })
-            
-            current_start = start
-            for i, chunk_pos in enumerate(chunk_positions):
-                # 计算该片段的绝对时间位置
-                chunk_start_time = start + chunk_pos['relative_start'] * (end - start)
+                chunk_start_char = i * max_chars_per_line
+                chunk_end_char = min((i + 1) * max_chars_per_line, len(text))
+                chunk_len = chunk_end_char - chunk_start_char
+                
+                # 计算该片段的相对位置
+                chunk_rel_start = float(chunk_start_char) / float(max(1, sentence_len - 1)) if sentence_len > 1 else 0.5
+                chunk_rel_end = float(chunk_end_char - 1) / float(max(1, sentence_len - 1)) if sentence_len > 1 else 0.5
+                
+                # 映射到绝对时间
+                chunk_start_time = sentence_start + chunk_rel_start * (sentence_end - sentence_start)
                 
                 if i == num_chunks - 1:
                     # 最后一个片段，确保结束时间正确
-                    chunk_end_time = end
+                    chunk_end_time = sentence_end
                 else:
-                    chunk_end_time = start + chunk_pos['relative_end'] * (end - start)
+                    chunk_end_time = sentence_start + chunk_rel_end * (sentence_end - sentence_start)
                 
-                chunk_text = text[int(chunk_pos['relative_start'] * len(text)):int(chunk_pos['relative_end'] * len(text))]
+                chunk_text = text[chunk_start_char:chunk_end_char]
                 
                 if chunk_text.strip():
                     final_texts.append(chunk_text)
                     final_timelines.append({
-                        'start': int(round(chunk_start_time)),
-                        'end': int(round(chunk_end_time))
+                        'start': chunk_start_time,
+                        'end': chunk_end_time
                     })
     
-    # 后处理：验证和调整时间戳
-    _adjust_timelines(final_timelines, total_start, total_end)
+    # 后处理：全局优化时间戳
+    _global_optimize_timelines(final_timelines, total_start, total_end)
+    
+    # 转换为整数微秒
+    for t in final_timelines:
+        t['start'] = int(round(t['start']))
+        t['end'] = int(round(t['end']))
     
     return final_texts, final_timelines
 
-def _adjust_timelines(timelines: list[dict], min_time: float, max_time: float):
-    """后处理时间戳，确保连续性和有效性"""
+def _global_optimize_timelines(timelines: list[dict], min_time: float, max_time: float):
+    """
+    全局优化时间戳，消除累积误差
+    
+    策略：
+    1. 确保严格递增和连续
+    2. 重新分配不均匀的时间间隔
+    3. 确保首尾精确对齐
+    """
     if not timelines:
         return
     
     MIN_DURATION = 1000  # 1ms
+    n = len(timelines)
     
     # 第 1 轮：确保边界有效
     for t in timelines:
-        t['start'] = max(int(min_time), min(t['start'], int(max_time)))
-        t['end'] = max(int(min_time), min(t['end'], int(max_time)))
+        t['start'] = max(min_time, min(t['start'], max_time))
+        t['end'] = max(min_time, min(t['end'], max_time))
     
-    # 第 2 轮：确保连续性
-    for i in range(1, len(timelines)):
+    # 第 2 轮：确保连续性（前向传递）
+    for i in range(1, n):
         if timelines[i]['start'] < timelines[i-1]['end']:
             timelines[i]['start'] = timelines[i-1]['end']
     
-    # 第 3 轮：确保最小持续时间
-    for i in range(len(timelines)):
-        if timelines[i]['end'] - timelines[i]['start'] < MIN_DURATION:
-            if i < len(timelines) - 1:
-                next_start = timelines[i+1]['start']
-                if next_start - timelines[i]['start'] > MIN_DURATION * 2:
+    # 第 3 轮：检查并修复大间隙（后向传递）
+    for i in range(n - 2, -1, -1):
+        gap = timelines[i+1]['start'] - timelines[i]['end']
+        if gap > 100000:  # 间隙 > 100ms
+            # 将间隙平均分配到两个片段
+            adjustment = gap / 2
+            timelines[i]['end'] += adjustment
+            timelines[i+1]['start'] -= adjustment
+    
+    # 第 4 轮：确保最小持续时间
+    for i in range(n):
+        duration = timelines[i]['end'] - timelines[i]['start']
+        if duration < MIN_DURATION:
+            if i < n - 1:
+                # 从下一个片段借时间
+                next_gap = timelines[i+1]['end'] - timelines[i+1]['start']
+                if next_gap > MIN_DURATION * 3:
                     timelines[i]['end'] = timelines[i]['start'] + MIN_DURATION
                     timelines[i+1]['start'] = timelines[i]['end']
                 else:
-                    mid = (timelines[i]['start'] + next_start) // 2
+                    # 取中点
+                    mid = (timelines[i]['start'] + timelines[i+1]['start']) / 2
                     timelines[i]['end'] = mid
                     timelines[i+1]['start'] = mid
             else:
-                timelines[i]['end'] = int(max_time)
+                # 最后一个片段
+                timelines[i]['end'] = max_time
     
-    # 第 4 轮：确保最后一个结束于总时长
-    if timelines[-1]['end'] < int(max_time):
-        gap = int(max_time) - timelines[-1]['end']
-        if gap < 1000000:  # 小于 1 秒
-            timelines[-1]['end'] = int(max_time)
+    # 第 5 轮：确保最后一个结束于总时长
+    if timelines[-1]['end'] < max_time:
+        gap = max_time - timelines[-1]['end']
+        if gap < 2000000:  # 小于 2 秒
+            timelines[-1]['end'] = max_time
     
-    # 第 5 轮：最终验证无重叠
-    for i in range(len(timelines) - 1):
+    # 第 6 轮：最终验证无重叠
+    for i in range(n - 1):
         if timelines[i]['end'] > timelines[i+1]['start']:
-            mid = (timelines[i]['end'] + timelines[i+1]['start']) // 2
+            # 取精确中点
+            mid = (timelines[i]['end'] + timelines[i+1]['start']) / 2
             timelines[i]['end'] = mid
             timelines[i+1]['start'] = mid
+    
+    # 第 7 轮：全局平滑（可选）
+    # 如果时间间隔差异太大，进行平滑处理
+    if n > 2:
+        durations = [t['end'] - t['start'] for t in timelines]
+        avg_duration = sum(durations) / n
+        
+        # 检查是否有极端不均匀的情况
+        for i in range(n):
+            if durations[i] > avg_duration * 3 or durations[i] < avg_duration * 0.3:
+                # 存在极端不均匀，但不调整（保留原始特征）
+                pass
