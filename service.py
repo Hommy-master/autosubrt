@@ -389,7 +389,7 @@ def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
     
     return result
 
-def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict]]:
+def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict], list[dict]]:
     """
     根据音频对齐文本时间线 - 优化版本
     
@@ -399,7 +399,7 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         max_chars_per_line: 每行最大字数
     
     Returns:
-        tuple: (texts 列表，timelines 列表)
+        tuple: (texts 列表，timelines 列表，char_timelines 字符级时间线列表)
     
     Raises:
         CustomException: 自定义异常
@@ -417,7 +417,7 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         
         if asr_text is None or not timestamps:
             logger.warning("No valid ASR result or timestamps")
-            return [text], [{"start": 0, "end": 30000000}]
+            return [text], [{"start": 0, "end": 30000000}], []
         
         logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
         
@@ -425,15 +425,15 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         user_sentences = split_text_by_punctuation_without_symbols(text)
         
         # 5. 基于累积分布函数 (CDF) 的精确对齐
-        final_texts, timelines = _cdf_based_alignment(
+        final_texts, timelines, char_timelines = _cdf_based_alignment(
             user_sentences, 
             timestamps,
             max_chars_per_line
         )
         
-        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines")
+        logger.info(f"Text alignment success: {len(final_texts)} texts, {len(timelines)} timelines, {len(char_timelines)} char timelines")
         
-        return final_texts, timelines
+        return final_texts, timelines, char_timelines
         
     except CustomException:
         raise
@@ -453,7 +453,7 @@ def _cdf_based_alignment(
     user_sentences: list[str], 
     timestamps: list[list],
     max_chars_per_line: int
-) -> tuple[list[str], list[dict]]:
+) -> tuple[list[str], list[dict], list[dict]]:
     """
     基于累积分布函数 (CDF) 的时间戳对齐 - 优化版本
     
@@ -461,14 +461,18 @@ def _cdf_based_alignment(
     1. 使用更精确的浮点数运算减少取整误差
     2. 全局优化时间戳分配，避免局部最优
     3. 增强的后处理验证机制
+    4. 新增：返回每个字符的时间线
+    
+    Returns:
+        tuple: (texts 列表，timelines 列表，char_timelines 字符级时间线列表)
     """
     if not user_sentences or not timestamps:
-        return [], []
+        return [], [], []
     
     # 过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
     if not valid_timestamps:
-        return [], []
+        return [], [], []
     
     # 构建 ASR 词汇时间轴（毫秒转微秒）
     asr_words = []
@@ -490,17 +494,54 @@ def _cdf_based_alignment(
     total_text_length = len(full_user_text)
     
     if total_text_length == 0:
-        return [], []
+        return [], [], []
     
-    # 计算每个字符的累积位置
-    char_positions = []
-    for i, char in enumerate(full_user_text):
-        char_positions.append({
-            'index': i,
-            'normalized_pos': float(i) / float(total_text_length - 1) if total_text_length > 1 else 0.5
+    # ========== 生成字符级时间线 ==========
+    char_timelines = []
+    for char_idx in range(total_text_length):
+        # 计算该字符的归一化位置
+        if total_text_length > 1:
+            char_norm = float(char_idx) / float(total_text_length - 1)
+        else:
+            char_norm = 0.5
+        
+        # 映射到 ASR 词汇索引
+        char_float_idx = char_norm * float(num_asr_words - 1)
+        
+        # 使用线性插值获取精确时间
+        if num_asr_words > 1:
+            char_floor = int(char_float_idx)
+            char_frac = char_float_idx - char_floor
+            
+            if char_floor < num_asr_words - 1:
+                char_start = (asr_words[char_floor]['start'] * (1 - char_frac) + 
+                             asr_words[char_floor + 1]['start'] * char_frac)
+            else:
+                char_start = asr_words[char_floor]['start']
+            
+            # 字符结束时间 = 下一个字符的开始时间（或当前词汇的结束时间）
+            next_char_idx = char_float_idx + 1.0
+            if next_char_idx < num_asr_words - 1:
+                next_floor = int(next_char_idx)
+                next_frac = next_char_idx - next_floor
+                if next_floor < num_asr_words - 1:
+                    char_end = (asr_words[next_floor]['start'] * (1 - next_frac) + 
+                               asr_words[next_floor + 1]['start'] * next_frac)
+                else:
+                    char_end = asr_words[next_floor]['start']
+            else:
+                char_end = asr_words[-1]['end']
+        else:
+            char_start = asr_words[0]['start']
+            char_end = asr_words[0]['end']
+        
+        char_timelines.append({
+            'char': full_user_text[char_idx],
+            'start': int(round(char_start)),
+            'end': int(round(char_end))
         })
     
-    # 为每个句子计算精确的时间戳
+    # ========== 生成句子级时间线 ==========
     sentence_timelines = []
     
     for sentence_idx, sentence in enumerate(user_sentences):
@@ -514,15 +555,12 @@ def _cdf_based_alignment(
         start_norm = float(start_char_idx) / float(max(1, total_text_length - 1))
         end_norm = float(end_char_idx) / float(max(1, total_text_length - 1))
         
-        # 映射到 ASR 词汇索引（使用更精确的方法）
-        # 关键改进：使用 (num_asr_words - 1) 而不是 num_asr_words
+        # 映射到 ASR 词汇索引
         start_float_idx = start_norm * float(num_asr_words - 1)
         end_float_idx = end_norm * float(num_asr_words - 1)
         
-        # 获取时间戳（不取整，保持浮点精度）
-        # 使用线性插值提高边界精度
+        # 获取时间戳（使用线性插值）
         if num_asr_words > 1:
-            # 对于非整数索引，使用相邻词汇的加权平均
             start_floor = int(start_float_idx)
             start_frac = start_float_idx - start_floor
             
@@ -551,7 +589,7 @@ def _cdf_based_alignment(
             'length': sent_len
         })
     
-    # 进一步分割长句子
+    # ========== 进一步分割长句子 ==========
     final_texts = []
     final_timelines = []
     
@@ -576,11 +614,14 @@ def _cdf_based_alignment(
             for i in range(num_chunks):
                 chunk_start_char = i * max_chars_per_line
                 chunk_end_char = min((i + 1) * max_chars_per_line, len(text))
-                chunk_len = chunk_end_char - chunk_start_char
                 
                 # 计算该片段的相对位置
-                chunk_rel_start = float(chunk_start_char) / float(max(1, sentence_len - 1)) if sentence_len > 1 else 0.5
-                chunk_rel_end = float(chunk_end_char - 1) / float(max(1, sentence_len - 1)) if sentence_len > 1 else 0.5
+                if sentence_len > 1:
+                    chunk_rel_start = float(chunk_start_char) / float(sentence_len - 1)
+                    chunk_rel_end = float(chunk_end_char - 1) / float(sentence_len - 1)
+                else:
+                    chunk_rel_start = 0.5
+                    chunk_rel_end = 0.5
                 
                 # 映射到绝对时间
                 chunk_start_time = sentence_start + chunk_rel_start * (sentence_end - sentence_start)
@@ -608,7 +649,42 @@ def _cdf_based_alignment(
         t['start'] = int(round(t['start']))
         t['end'] = int(round(t['end']))
     
-    return final_texts, final_timelines
+    # 优化字符级时间戳（确保连续性）
+    _optimize_char_timelines(char_timelines, total_start, total_end)
+    
+    return final_texts, final_timelines, char_timelines
+
+def _optimize_char_timelines(char_timelines: list[dict], min_time: float, max_time: float):
+    """优化字符级时间戳，确保连续性和合理性"""
+    if not char_timelines:
+        return
+    
+    n = len(char_timelines)
+    
+    # 第 1 轮：确保边界有效
+    for t in char_timelines:
+        t['start'] = max(int(min_time), min(t['start'], int(max_time)))
+        t['end'] = max(int(min_time), min(t['end'], int(max_time)))
+    
+    # 第 2 轮：确保连续性
+    for i in range(1, n):
+        if char_timelines[i]['start'] < char_timelines[i-1]['end']:
+            char_timelines[i]['start'] = char_timelines[i-1]['end']
+        
+        # 确保结束时间 >= 开始时间
+        if char_timelines[i]['end'] <= char_timelines[i]['start']:
+            if i < n - 1:
+                char_timelines[i]['end'] = char_timelines[i+1]['start']
+            else:
+                char_timelines[i]['end'] = int(max_time)
+    
+    # 第 3 轮：确保第一个从 0 开始
+    if char_timelines and char_timelines[0]['start'] > 0:
+        char_timelines[0]['start'] = 0
+    
+    # 第 4 轮：确保最后一个结束于总时长
+    if char_timelines and char_timelines[-1]['end'] < int(max_time):
+        char_timelines[-1]['end'] = int(max_time)
 
 def _global_optimize_timelines(timelines: list[dict], min_time: float, max_time: float):
     """

@@ -49,10 +49,23 @@ class AsrTextAlignRequest(BaseModel):
 
 class TimelineItem(BaseModel):
     """时间线项"""
-    start: int = Field(..., description="开始时间(微秒)")
-    end: int = Field(..., description="结束时间(微秒)")
+    start: int = Field(..., description="开始时间 (微秒)")
+    end: int = Field(..., description="结束时间 (微秒)")
+
+class CharTimelineItem(BaseModel):
+    """字符级时间线项"""
+    char: str = Field(..., description="字符")
+    start: int = Field(..., description="开始时间 (微秒)")
+    end: int = Field(..., description="结束时间 (微秒)")
+
+class WordTimelineItem(BaseModel):
+    """字级时间线项"""
+    start: int = Field(..., description="开始时间 (微秒)")
+    end: int = Field(..., description="结束时间 (微秒)")
 
 class AsrTextAlignResponse(BaseModel):
     """语音 -> 对齐字幕时间线响应参数"""
     texts: list[str] = Field(..., description="对齐后的文本列表")
     timelines: list[TimelineItem] = Field(..., description="对应的时间线列表")
+    words: list[str] = Field(default=[], description="字数组（按顺序排列的每个字）")
+    words_timelines: list[WordTimelineItem] = Field(default=[], description="每个字对应的时间线（与 words 数组一一对应）")
