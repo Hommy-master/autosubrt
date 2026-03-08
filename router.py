@@ -46,12 +46,18 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
         max_chars_per_line=request.max_chars_per_line
     )
     
-    # 转换句子级时间线格式
-    timeline_items = [schemas.TimelineItem(start=item["start"], end=item["end"]) for item in timelines]
+    # 转换句子级时间线格式（确保为整数）
+    timeline_items = [
+        schemas.TimelineItem(start=int(round(item["start"])), end=int(round(item["end"]))) 
+        for item in timelines
+    ]
     
     # 拆分字符级时间线为 words 和 words_timelines
     words = [item["char"] for item in char_timelines]
-    words_timeline_items = [schemas.WordTimelineItem(start=item["start"], end=item["end"]) for item in char_timelines]
+    words_timeline_items = [
+        schemas.WordTimelineItem(start=int(round(item["start"])), end=int(round(item["end"]))) 
+        for item in char_timelines
+    ]
     
     return schemas.AsrTextAlignResponse(
         texts=texts, 
