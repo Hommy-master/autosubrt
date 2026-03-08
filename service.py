@@ -476,21 +476,90 @@ def _generate_char_timelines(user_sentences: list[str], timestamps: list[list]) 
         )
         char_timelines.append(char_timeline)
     
+    # 后处理：确保每个字符的时间线有效（start < end）
+    _ensure_valid_char_timelines(char_timelines)
+    
     return char_timelines
 
 def _calculate_char_timeline(char_idx: int, total_length: int, asr_words: list, num_words: int, full_text: str) -> dict:
     """计算单个字符的时间线"""
-    char_norm = float(char_idx) / float(max(1, total_length - 1)) if total_length > 1 else 0.5
+    # 计算归一化位置
+    if total_length > 1:
+        char_norm = float(char_idx) / float(total_length - 1)
+    else:
+        char_norm = 0.5
+    
     char_float_idx = char_norm * float(num_words - 1)
     
+    # 获取开始时间
     char_start = _interpolate_time(char_float_idx, asr_words, num_words)
-    char_end = _interpolate_time(char_float_idx + 1.0, asr_words, num_words)
+    
+    # 获取结束时间（下一个字符的开始时间）
+    if char_idx < total_length - 1:
+        # 不是最后一个字符：使用下一个字符的开始时间作为结束时间
+        next_char_norm = float(char_idx + 1) / float(total_length - 1)
+        next_char_float_idx = next_char_norm * float(num_words - 1)
+        char_end = _interpolate_time(next_char_float_idx, asr_words, num_words)
+    else:
+        # 最后一个字符：使用 ASR 的总结束时间
+        char_end = asr_words[-1]['end'] if asr_words else char_start + 1000
     
     return {
         'char': full_text[char_idx],
         'start': char_start,
         'end': char_end
     }
+
+def _ensure_valid_char_timelines(char_timelines: list[dict]):
+    """确保字符级时间线有效（start < end，且差值 >= 1ms）"""
+    MIN_DURATION = 1000  # 1ms = 1000 微秒
+    
+    if not char_timelines:
+        return
+    
+    # 第 1 轮：确保每个时间线都有正的持续时间
+    for i in range(len(char_timelines)):
+        duration = char_timelines[i]['end'] - char_timelines[i]['start']
+        
+        if duration < MIN_DURATION:
+            # 需要调整
+            if i < len(char_timelines) - 1:
+                # 不是最后一个：从下一个字符借时间
+                next_start = char_timelines[i+1]['start']
+                needed_duration = MIN_DURATION
+                
+                if next_start - char_timelines[i]['start'] > needed_duration:
+                    # 有足够空间
+                    char_timelines[i]['end'] = char_timelines[i]['start'] + needed_duration
+                else:
+                    # 空间不足：取中点
+                    mid = (char_timelines[i]['start'] + next_start) // 2
+                    char_timelines[i]['end'] = mid
+                    char_timelines[i+1]['start'] = mid
+            else:
+                # 最后一个字符：延长结束时间
+                char_timelines[i]['end'] = char_timelines[i]['start'] + MIN_DURATION
+    
+    # 第 2 轮：确保连续性（无间隙、无重叠）
+    for i in range(1, len(char_timelines)):
+        if char_timelines[i]['start'] < char_timelines[i-1]['end']:
+            # 有重叠：调整为相等
+            char_timelines[i]['start'] = char_timelines[i-1]['end']
+        
+        # 再次检查持续时间
+        duration = char_timelines[i]['end'] - char_timelines[i]['start']
+        if duration < MIN_DURATION:
+            char_timelines[i]['end'] = char_timelines[i]['start'] + MIN_DURATION
+    
+    # 第 3 轮：确保第一个字符从合理时间开始
+    if char_timelines[0]['start'] < 0:
+        char_timelines[0]['start'] = 0
+    
+    # 第 4 轮：重新检查所有持续时间
+    for i in range(len(char_timelines)):
+        duration = char_timelines[i]['end'] - char_timelines[i]['start']
+        if duration < MIN_DURATION:
+            char_timelines[i]['end'] = char_timelines[i]['start'] + MIN_DURATION
 
 def _generate_sentence_timelines(user_sentences: list[str], timestamps: list[list]) -> list[dict]:
     """生成句子级时间线"""
@@ -579,7 +648,7 @@ def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int)
                 'end': sent_info['end']
             })
         else:
-            chunks = _split_long_sentence(sent_info, max_chars_per_line)
+            chunks = _split_long_sentence(sent_info, max_chars)
             final_texts.extend(chunks['texts'])
             final_timelines.extend(chunks['timelines'])
     
