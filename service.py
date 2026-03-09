@@ -434,7 +434,9 @@ def _get_asr_result(audio_url: str, audio_file: str) -> tuple[str, list[list]]:
     result = model.generate(input=audio_file)
     
     asr_text, timestamps = extract_asr_result(result)
-    logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
+    
+    if asr_text and timestamps:
+        logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
     
     return asr_text, timestamps
 
@@ -447,7 +449,7 @@ def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:
         timestamps: ASR 返回的时间戳列表
     
     Returns:
-        list[dict]: 每个字符的时间线，包含 char, start, end
+        list[dict]: 每个字符的时间线，包含 char, start, end（已过滤空白字符）
     """
     valid_timestamps = filter_valid_timestamps(timestamps)
     if not asr_text or not valid_timestamps:
@@ -458,8 +460,9 @@ def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:
     total_text_length = len(asr_text)
     num_asr_words = len(asr_words)
     
-    char_timelines = []
+    all_char_timelines = []
     
+    # 1. 为所有字符（包括空白）生成时间线
     for char_idx in range(total_text_length):
         # 计算归一化位置
         if total_text_length > 1:
@@ -482,16 +485,66 @@ def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:
             # 最后一个字符：使用 ASR 的总结束时间
             char_end = asr_words[-1]['end'] if asr_words else char_start + 1000
         
-        char_timelines.append({
-            'char': asr_text[char_idx],  # ✅ 使用 ASR 文本
+        all_char_timelines.append({
+            'char': asr_text[char_idx],
             'start': char_start,
             'end': char_end
         })
     
-    # 后处理：确保时间线有效
-    _ensure_valid_char_timelines(char_timelines)
+    # 2. 后处理：确保时间线有效
+    _ensure_valid_char_timelines(all_char_timelines)
     
-    return char_timelines
+    # 3. 过滤掉空白字符
+    filtered_char_timelines = _filter_whitespace_chars(all_char_timelines)
+    
+    return filtered_char_timelines
+
+def _filter_whitespace_chars(char_timelines: list[dict]) -> list[dict]:
+    """
+    过滤掉空白字符的时间线，同时保持剩余字符的时间线有效性
+    
+    Args:
+        char_timelines: 包含所有字符（含空白）的时间线列表
+    
+    Returns:
+        list[dict]: 过滤后的时间线列表
+    """
+    import re
+    
+    if not char_timelines:
+        return []
+    
+    # 定义空白字符集合
+    whitespace_chars = set([' ', '\t', '\n', '\r', '\f', '\v'])
+    
+    # 过滤空白字符
+    filtered = [
+        ct for ct in char_timelines 
+        if ct['char'] not in whitespace_chars and not re.match(r'\s', ct['char'])
+    ]
+    
+    # 重新调整时间线，确保连续性
+    if filtered:
+        # 确保第一个从合理时间开始
+        if filtered[0]['start'] < 0:
+            filtered[0]['start'] = 0
+        
+        # 确保连续性（无间隙、无重叠）
+        for i in range(1, len(filtered)):
+            if filtered[i]['start'] < filtered[i-1]['end']:
+                # 有重叠：调整为相等
+                filtered[i]['start'] = filtered[i-1]['end']
+            
+            # 确保持续时间 >= 1ms
+            duration = filtered[i]['end'] - filtered[i]['start']
+            if duration < 1000:  # 1ms = 1000 微秒
+                filtered[i]['end'] = filtered[i]['start'] + 1000
+        
+        # 确保最后一个结束于合理时间
+        if len(filtered) > 1 and filtered[-1]['end'] < filtered[-1]['start']:
+            filtered[-1]['end'] = filtered[-1]['start'] + 1000
+    
+    return filtered
 
 def _align_user_text(
     user_sentences: list[str], 
@@ -546,7 +599,7 @@ def _generate_sentence_timelines(user_sentences: list[str], timestamps: list[lis
     for sentence_idx, sentence in enumerate(user_sentences):
         timeline = _calculate_sentence_timeline(
             sentence_idx, sentence, user_sentences, 
-            full_user_text, total_text_length, asr_words, num_asr_words
+            full_user_text, total_text_length, asr_words, num_asr_words  # ✅ 修复：使用 num_asr_words
         )
         sentence_timelines.append(timeline)
     
@@ -618,7 +671,7 @@ def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int)
                 'end': sent_info['end']
             })
         else:
-            chunks = _split_long_sentence(sent_info, max_chars)
+            chunks = _split_long_sentence(sent_info, max_chars_per_line)  # ✅ 修复：使用正确的参数名
             final_texts.extend(chunks['texts'])
             final_timelines.extend(chunks['timelines'])
     
