@@ -59,9 +59,27 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
         for item in char_timelines
     ]
     
+    # 转换为字典格式供 calibrate_subtitles 使用
+    words_timeline_dicts = [{"start": wt.start, "end": wt.end} for wt in words_timeline_items]
+    timeline_items_dicts = [{"start": ti.start, "end": ti.end} for ti in timeline_items]
+    
+    # 校准字幕时间线
+    calibrated_timelines = service.calibrate_subtitles(
+        texts, 
+        timeline_items_dicts, 
+        words, 
+        words_timeline_dicts
+    )
+    
+    # 将校准后的结果转换回 TimelineItem
+    calibrated_timeline_items = [
+        schemas.TimelineItem(start=t["start"], end=t["end"]) 
+        for t in calibrated_timelines
+    ]
+    
     return schemas.AsrTextAlignResponse(
         texts=texts, 
-        timelines=service.calibrate_subtitles(texts,timeline_items, words, words_timeline_items), 
+        timelines=calibrated_timeline_items, 
         words=words, 
         words_timelines=words_timeline_items
     )
