@@ -861,3 +861,202 @@ def _cleanup_audio_file(audio_file: str):
             logger.info(f"Temporary audio file cleaned up: {audio_file}")
         except Exception as e:
             logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
+
+def calibrate_subtitles(texts, texts_timelines, words, words_timelines):
+    """
+    使用ASR识别的字时间线校准字幕时间线。
+
+    参数：
+        texts: list[str] - 字幕文本列表，每个元素是一句字幕
+        texts_timelines: list[dict] - 每句字幕的原始时间线，格式为{'start': int, 'end': int}
+        words: list[str] - ASR识别的字序列
+        words_timelines: list[dict] - 每个字的时间线，与words一一对应，格式同上
+
+    返回：
+        list[dict] - 校准后的字幕时间线，与texts顺序相同
+    """
+    # 1. 将字幕拆分为字符序列，并记录每个字符所属的句子索引
+    all_chars = []          # 字符列表
+    sent_ids = []           # 每个字符对应的句子索引
+    for sid, sent in enumerate(texts):
+        for ch in sent:
+            all_chars.append(ch)
+            sent_ids.append(sid)
+
+    # 2. 使用动态规划进行全局序列对齐，得到每个字幕字符对应的words索引（可能为None）
+    def align_sequences(a, b):
+        """返回列表，长度=len(a)，每个元素是a中字符在b中的索引（若被删除则为None）"""
+        M, N = len(a), len(b)
+        # 方向矩阵：0未用，1左上，2上，3左；使用bytearray节省内存
+        direc = [bytearray(N + 1) for _ in range(M + 1)]
+        # 初始化第一行和第一列的方向
+        for j in range(1, N + 1):
+            direc[0][j] = 3          # 从左来（插入）
+        for i in range(1, M + 1):
+            direc[i][0] = 2          # 从上来（删除）
+
+        # 动态规划计算编辑距离，同时记录方向
+        prev = list(range(N + 1))     # dp[0][j]
+        for i in range(1, M + 1):
+            curr = [0] * (N + 1)
+            curr[0] = i
+            for j in range(1, N + 1):
+                # 三种操作代价
+                del_cost = prev[j] + 1
+                ins_cost = curr[j - 1] + 1
+                sub_cost = prev[j - 1] + (0 if a[i - 1] == b[j - 1] else 1)
+                # 选择最小代价并记录方向
+                if sub_cost <= del_cost and sub_cost <= ins_cost:
+                    curr[j] = sub_cost
+                    direc[i][j] = 1   # 左上
+                elif del_cost <= ins_cost:
+                    curr[j] = del_cost
+                    direc[i][j] = 2   # 上
+                else:
+                    curr[j] = ins_cost
+                    direc[i][j] = 3   # 左
+            prev = curr
+
+        # 回溯得到每个a字符对应的b索引
+        a2b = [None] * M
+        i, j = M, N
+        while i > 0 and j > 0:
+            d = direc[i][j]
+            if d == 1:                # 左上：a[i-1]对应b[j-1]
+                a2b[i - 1] = j - 1
+                i -= 1
+                j -= 1
+            elif d == 2:              # 上：删除a[i-1]
+                i -= 1
+            else:                     # 左：插入b[j-1]，忽略
+                j -= 1
+        # 处理剩余的a字符（全部被删除）
+        while i > 0:
+            a2b[i - 1] = None
+            i -= 1
+        return a2b
+
+    # 执行对齐
+    char_to_word = align_sequences(all_chars, words)
+
+    # 3. 统计每个句子对应的words索引范围（最小和最大）
+    sent_min = [None] * len(texts)
+    sent_max = [None] * len(texts)
+    for char_idx, word_idx in enumerate(char_to_word):
+        if word_idx is not None:
+            sid = sent_ids[char_idx]
+            if sent_min[sid] is None or word_idx < sent_min[sid]:
+                sent_min[sid] = word_idx
+            if sent_max[sid] is None or word_idx > sent_max[sid]:
+                sent_max[sid] = word_idx
+
+    # 4. 构建锚点：有匹配的句子，用匹配的字时间作为校准时间
+    anchors = {}          # 句子索引 -> {'start': 时间, 'end': 时间}
+    for sid in range(len(texts)):
+        if sent_min[sid] is not None and sent_max[sid] is not None:
+            start_time = words_timelines[sent_min[sid]]['start']
+            end_time = words_timelines[sent_max[sid]]['end']
+            anchors[sid] = {'start': start_time, 'end': end_time}
+
+    # 如果没有锚点，则直接返回原始时间线（但需保证不重叠，此处简单返回）
+    if not anchors:
+        # 简单处理：若原始有重叠则调整，但通常原始连续，直接返回
+        return texts_timelines
+
+    # 5. 准备每个句子的原始时长（用于无匹配句子的插值）
+    orig_durs = [t['end'] - t['start'] for t in texts_timelines]
+
+    # 6. 按顺序处理所有句子，使用锚点约束生成最终时间线
+    result = [None] * len(texts)
+
+    # 先将锚点放入结果
+    for sid, tm in anchors.items():
+        result[sid] = tm
+
+    # 处理开头段（第一个锚点之前）
+    anchor_ids = sorted(anchors.keys())
+    first_anchor = anchor_ids[0]
+    if first_anchor > 0:
+        # 开头段句子索引 0 到 first_anchor-1
+        prev_end = 0   # 假设时间从0开始，也可用原始第一个start，但为了统一用0
+        next_start = anchors[first_anchor]['start']
+        seg_ids = list(range(0, first_anchor))
+        seg_durs = [orig_durs[i] for i in seg_ids]
+        total_dur = sum(seg_durs)
+        available = next_start - prev_end
+        if available < 0:
+            available = 0   # 避免负值，实际上不会
+        if total_dur <= available:
+            # 直接连续放置
+            cur = prev_end
+            for i in seg_ids:
+                result[i] = {'start': cur, 'end': cur + orig_durs[i]}
+                cur += orig_durs[i]
+        else:
+            # 需要压缩
+            # 按比例分配整数微秒
+            alloc = []
+            remain = available
+            for d in seg_durs:
+                a = d * available // total_dur
+                alloc.append(a)
+                remain -= a
+            for j in range(remain):
+                alloc[j] += 1
+            cur = prev_end
+            for k, i in enumerate(seg_ids):
+                end = cur + alloc[k]
+                result[i] = {'start': cur, 'end': end}
+                cur = end
+
+    # 处理中间段
+    for idx in range(len(anchor_ids) - 1):
+        a = anchor_ids[idx]
+        b = anchor_ids[idx + 1]
+        if b - a > 1:
+            seg_ids = list(range(a + 1, b))
+            seg_durs = [orig_durs[i] for i in seg_ids]
+            total_dur = sum(seg_durs)
+            prev_end = anchors[a]['end']
+            next_start = anchors[b]['start']
+            available = next_start - prev_end
+            if available < 0:
+                available = 0
+            if total_dur <= available:
+                cur = prev_end
+                for i in seg_ids:
+                    result[i] = {'start': cur, 'end': cur + orig_durs[i]}
+                    cur += orig_durs[i]
+            else:
+                alloc = []
+                remain = available
+                for d in seg_durs:
+                    a_alloc = d * available // total_dur
+                    alloc.append(a_alloc)
+                    remain -= a_alloc
+                for j in range(remain):
+                    alloc[j] += 1
+                cur = prev_end
+                for k, i in enumerate(seg_ids):
+                    end = cur + alloc[k]
+                    result[i] = {'start': cur, 'end': end}
+                    cur = end
+
+    # 处理结尾段（最后一个锚点之后）
+    last_anchor = anchor_ids[-1]
+    if last_anchor < len(texts) - 1:
+        seg_ids = list(range(last_anchor + 1, len(texts)))
+        seg_durs = [orig_durs[i] for i in seg_ids]
+        prev_end = anchors[last_anchor]['end']
+        cur = prev_end
+        for i in seg_ids:
+            result[i] = {'start': cur, 'end': cur + orig_durs[i]}
+            cur += orig_durs[i]
+
+    # 7. 确保每个时间段的start < end（以防原始时长为0）
+    for t in result:
+        if t['start'] >= t['end']:
+            t['end'] = t['start'] + 1
+
+    # 8. 返回结果（顺序与输入一致）
+    return result

@@ -61,7 +61,7 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
     
     return schemas.AsrTextAlignResponse(
         texts=texts, 
-        timelines=timeline_items, 
+        timelines=service.calibrate_subtitles(texts,timeline_items, words, words_timeline_items), 
         words=words, 
         words_timelines=words_timeline_items
     )
