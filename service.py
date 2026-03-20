@@ -584,6 +584,135 @@ def _align_user_text(
     
     return final_texts, final_timelines
 
+
+def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int):
+    """
+    分割长句子并优化时间线
+    
+    规则：
+    - 当字幕长度 > max_chars_per_line 时，平均分成多条字幕
+    - 确保每条字幕的字数不超过 max_chars_per_line
+    - 示例：30 个字，max=15 → 分成 2 条，每条 15 字
+    - 示例：31 个字，max=15 → 分成 3 条，[11, 10, 10]
+    - 示例：46 个字，max=15 → 分成 4 条，[12, 12, 11, 11]
+    """
+    final_texts = []
+    final_timelines = []
+    
+    for sent_info in sentence_timelines:
+        text = sent_info['text']
+        text_length = len(text)
+        
+        if text_length <= max_chars_per_line:
+            # 不需要分割
+            final_texts.append(text)
+            final_timelines.append({
+                'start': sent_info['start'],
+                'end': sent_info['end']
+            })
+        else:
+            # 计算分割方案
+            num_parts, part_lengths = _calculate_part_lengths(
+                text_length, max_chars_per_line
+            )
+            
+            # 分割文本和时间线
+            parts = _split_text_with_timelines(
+                text, sent_info, num_parts, part_lengths
+            )
+            
+            final_texts.extend(parts['texts'])
+            final_timelines.extend(parts['timelines'])
+    
+    return final_texts, final_timelines
+
+
+def _calculate_part_lengths(text_length: int, max_chars: int) -> tuple[int, list[int]]:
+    """
+    计算分割条数和每条的字数（尽可能平均分配）
+    
+    Args:
+        text_length: 文本总长度
+        max_chars: 每行最大字数
+    
+    Returns:
+        tuple: (分成的条数，每条的字数列表)
+    
+    示例：
+        - 30 个字，max=15 → 2 条，[15, 15]
+        - 31 个字，max=15 → 3 条，[11, 10, 10]
+        - 46 个字，max=15 → 4 条，[12, 12, 11, 11]
+    """
+    # 计算需要分成多少条（向上取整）
+    num_parts = (text_length + max_chars - 1) // max_chars
+    
+    # 计算基础字数和余数
+    base_length = text_length // num_parts
+    extra = text_length % num_parts  # 多出来的字，分配给前面的部分
+    
+    # 生成每条的字数列表
+    part_lengths = [
+        base_length + (1 if i < extra else 0) 
+        for i in range(num_parts)
+    ]
+    
+    return num_parts, part_lengths
+
+
+def _split_text_with_timelines(
+    text: str, 
+    sent_info: dict, 
+    num_parts: int, 
+    part_lengths: list[int]
+) -> dict:
+    """
+    根据字数分配方案分割文本和时间线
+    
+    Args:
+        text: 原始文本
+        sent_info: 原句信息（包含 start, end）
+        num_parts: 分成的条数
+        part_lengths: 每条的字数列表
+    
+    Returns:
+        dict: {'texts': [...], 'timelines': [...]}
+    """
+    texts = []
+    timelines = []
+    
+    current_idx = 0
+    current_time = sent_info['start']
+    total_duration = sent_info['end'] - sent_info['start']
+    total_length = len(text)
+    
+    for part_idx in range(num_parts):
+        part_length = part_lengths[part_idx]
+        
+        # 提取文本
+        part_text = text[current_idx:current_idx + part_length]
+        
+        # 计算时间线（按字数比例分配）
+        part_duration = int(total_duration * part_length / total_length)
+        part_start_time = current_time
+        part_end_time = current_time + part_duration
+        
+        # 最后一条使用原始结束时间，避免累积误差
+        if part_idx == num_parts - 1:
+            part_end_time = sent_info['end']
+        
+        # 添加结果
+        texts.append(part_text)
+        timelines.append({
+            'start': part_start_time,
+            'end': part_end_time
+        })
+        
+        # 更新状态
+        current_idx += part_length
+        current_time = part_end_time
+    
+    return {'texts': texts, 'timelines': timelines}
+
 def _generate_sentence_timelines(user_sentences: list[str], timestamps: list[list]) -> list[dict]:
     """生成句子级时间线"""
     valid_timestamps = filter_valid_timestamps(timestamps)
@@ -657,65 +786,6 @@ def _interpolate_time(float_idx: float, asr_words: list[dict], num_words: int) -
             return asr_words[max(0, num_words - 1)]['start']
     else:
         return asr_words[0]['start']
-
-def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int):
-    """
-    分割长句子并优化时间线
-    
-    规则：
-    - 当字幕长度 > max_chars_per_line 时，平均分成两行
-    - 示例：16 个字 → 8+8, 17 个字 → 8+9
-    """
-    final_texts = []
-    final_timelines = []
-    
-    for sent_info in sentence_timelines:
-        text = sent_info['text']
-        text_length = len(text)
-        
-        if text_length <= max_chars_per_line:
-            # 不需要分割
-            final_texts.append(text)
-            final_timelines.append({
-                'start': sent_info['start'],
-                'end': sent_info['end']
-            })
-        else:
-            # 平均分成两行
-            half_length = text_length // 2
-            
-            # 第一行：前一半（如果总长度是奇数，第一行少一个字）
-            first_part_len = half_length
-            
-            # 分割文本
-            first_text = text[:first_part_len]
-            second_text = text[first_part_len:]
-            
-            # 计算时间线（按字数比例分配）
-            total_duration = sent_info['end'] - sent_info['start']
-            
-            # 第一行时间线
-            first_start = sent_info['start']
-            first_end = sent_info['start'] + int(total_duration * first_part_len / text_length)
-            
-            # 第二行时间线
-            second_start = first_end
-            second_end = sent_info['end']
-            
-            # 添加结果
-            final_texts.append(first_text)
-            final_timelines.append({
-                'start': first_start,
-                'end': first_end
-            })
-            
-            final_texts.append(second_text)
-            final_timelines.append({
-                'start': second_start,
-                'end': second_end
-            })
-    
-    return final_texts, final_timelines
 
 def _ensure_valid_char_timelines(char_timelines: list[dict]):
     """确保字符级时间线有效（start < end，且差值 >= 1ms）"""
