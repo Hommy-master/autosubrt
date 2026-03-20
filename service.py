@@ -659,63 +659,63 @@ def _interpolate_time(float_idx: float, asr_words: list[dict], num_words: int) -
         return asr_words[0]['start']
 
 def _split_and_optimize(sentence_timelines: list[dict], max_chars_per_line: int):
-    """分割长句子并优化时间线"""
+    """
+    分割长句子并优化时间线
+    
+    规则：
+    - 当字幕长度 > max_chars_per_line 时，平均分成两行
+    - 示例：16 个字 → 8+8, 17 个字 → 8+9
+    """
     final_texts = []
     final_timelines = []
     
     for sent_info in sentence_timelines:
-        if len(sent_info['text']) <= max_chars_per_line:
-            final_texts.append(sent_info['text'])
+        text = sent_info['text']
+        text_length = len(text)
+        
+        if text_length <= max_chars_per_line:
+            # 不需要分割
+            final_texts.append(text)
             final_timelines.append({
                 'start': sent_info['start'],
                 'end': sent_info['end']
             })
         else:
-            chunks = _split_long_sentence(sent_info, max_chars_per_line)  # ✅ 修复：使用正确的参数名
-            final_texts.extend(chunks['texts'])
-            final_timelines.extend(chunks['timelines'])
+            # 平均分成两行
+            half_length = text_length // 2
+            
+            # 第一行：前一半（如果总长度是奇数，第一行少一个字）
+            first_part_len = half_length
+            
+            # 分割文本
+            first_text = text[:first_part_len]
+            second_text = text[first_part_len:]
+            
+            # 计算时间线（按字数比例分配）
+            total_duration = sent_info['end'] - sent_info['start']
+            
+            # 第一行时间线
+            first_start = sent_info['start']
+            first_end = sent_info['start'] + int(total_duration * first_part_len / text_length)
+            
+            # 第二行时间线
+            second_start = first_end
+            second_end = sent_info['end']
+            
+            # 添加结果
+            final_texts.append(first_text)
+            final_timelines.append({
+                'start': first_start,
+                'end': first_end
+            })
+            
+            final_texts.append(second_text)
+            final_timelines.append({
+                'start': second_start,
+                'end': second_end
+            })
     
     return final_texts, final_timelines
-
-def _split_long_sentence(sent_info: dict, max_chars: int) -> dict:
-    """分割长句子"""
-    text = sent_info['text']
-    start = sent_info['start']
-    end = sent_info['end']
-    length = len(text)
-    
-    num_chunks = (length + max_chars - 1) // max_chars
-    texts = []
-    timelines = []
-    
-    for i in range(num_chunks):
-        chunk_start = i * max_chars
-        chunk_end = min((i + 1) * max_chars, length)
-        chunk_text = text[chunk_start:chunk_end]
-        
-        if chunk_text.strip():
-            chunk_start_time, chunk_end_time = _calculate_chunk_timeline(
-                i, num_chunks, chunk_start, chunk_end, length, start, end
-            )
-            
-            texts.append(chunk_text)
-            timelines.append({'start': chunk_start_time, 'end': chunk_end_time})
-    
-    return {'texts': texts, 'timelines': timelines}
-
-def _calculate_chunk_timeline(chunk_idx, num_chunks, chunk_start, chunk_end, length, start, end):
-    """计算单个片段的时间线"""
-    if length > 1:
-        chunk_rel_start = float(chunk_start) / float(length - 1)
-        chunk_rel_end = float(chunk_end - 1) / float(length - 1)
-    else:
-        chunk_rel_start = 0.5
-        chunk_rel_end = 0.5
-    
-    chunk_start_time = start + chunk_rel_start * (end - start)
-    chunk_end_time = start + chunk_rel_end * (end - start)
-    
-    return chunk_start_time, chunk_end_time
 
 def _ensure_valid_char_timelines(char_timelines: list[dict]):
     """确保字符级时间线有效（start < end，且差值 >= 1ms）"""
