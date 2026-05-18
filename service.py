@@ -404,7 +404,7 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
     audio_file = None
     try:
         # 1. 下载音频并获取 ASR 结果
-        asr_text, timestamps = _get_asr_result(audio_url, audio_file)
+        asr_text, timestamps, audio_file = _get_asr_result(audio_url)
         
         if not asr_text or not timestamps:
             return [text], [{"start": 0, "end": 30000000}], []
@@ -428,8 +428,8 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
     finally:
         _cleanup_audio_file(audio_file)
 
-def _get_asr_result(audio_url: str, audio_file: str) -> tuple[str, list[list]]:
-    """下载音频并获取 ASR 识别结果"""
+def _get_asr_result(audio_url: str) -> tuple[str, list[list], str]:
+    """下载音频并获取 ASR 识别结果，返回 (文本, 时间戳, 临时音频路径)"""
     audio_file = helper.download(audio_url, config.TEMP_DIR)
     result = model.generate(input=audio_file)
     
@@ -438,7 +438,7 @@ def _get_asr_result(audio_url: str, audio_file: str) -> tuple[str, list[list]]:
     if asr_text and timestamps:
         logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
     
-    return asr_text, timestamps
+    return asr_text, timestamps, audio_file
 
 def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:
     """
