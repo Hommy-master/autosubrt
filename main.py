@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import router
 import asr
+import punctuation
 import middlewares
 from logger import logger
 
@@ -15,6 +16,7 @@ async def lifespan(app: FastAPI):
     logger.info("✅ app start")
     # 在应用启动时加载模型
     asr.load_model()
+    punctuation.load_model()
     yield
     # ---------------- 关闭 ----------------
     # await close_db_pool()
@@ -45,5 +47,5 @@ for r in app.routes:
 if __name__ == "__main__":
     import uvicorn
     logger.info("Start AutoSubRT Service ...")
-    uvicorn.run(app, host="0.0.0.0", port=30000, lifespan="on")
+    uvicorn.run(app, host="0.0.0.0", port=30001, lifespan="on")
     logger.info("AutoSubRT Service stopped")

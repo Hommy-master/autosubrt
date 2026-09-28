@@ -5,13 +5,15 @@ import helper
 import pysrt
 import config
 import asr
+import punctuation
 import os
 import re
 
 
 # 断句标点：只作为分句边界，不进入 utterance 文本
 # 与 split_text_by_punctuation_without_symbols 的分隔符保持一致（chars 不含空白字符，故无需 \n\r）
-SENTENCE_PUNCTUATIONS = set("。！？，；.!?,;:")
+# 复用标点恢复模块的标点表，保证「分句结果拼回去」与「带标点的完整文案」始终对得上
+SENTENCE_PUNCTUATIONS = punctuation.PUNCTUATIONS
 
 # 标点缺失时，用超过该阈值（毫秒）的静音兜底断句
 UTTERANCE_SILENCE_MS = 500
@@ -34,10 +36,13 @@ def asr_text(audio_url: str) -> str:
         # 1. 下载音频文件
         audio_file = helper.download(audio_url, config.TEMP_DIR)
 
-        # 2. 执行音频转文本（faster-whisper 的输出自带标点，无需独立的标点模型）
+        # 2. 执行音频转文本
         result = asr.transcribe(audio_file)
-        logger.info(f"ASR text success, text length: {len(result.text)}")
-        return result.text
+
+        # 3. 补标点（whisper 对中文标点不可靠，统一由标点模型决定）
+        text = punctuation.restore(result.text)
+        logger.info(f"ASR text success, text length: {len(text)}")
+        return text
 
     except CustomException:
         # 自定义异常直接抛出
@@ -77,12 +82,15 @@ def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
 
         # 3. 按标点断句（标点缺失时按静音兜底）
         utterances = split_utterances(result.chars, result.timestamps)
+
+        # 4. 补标点（whisper 对中文标点不可靠，统一由标点模型决定）
+        text = punctuation.restore(result.text)
         logger.info(
             f"ASR utterances success, text length: {len(result.chars)}, "
             f"utterances count: {len(utterances)}"
         )
 
-        return result.text, utterances
+        return text, utterances
 
     except CustomException:
         # 自定义异常直接抛出

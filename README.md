@@ -4,6 +4,10 @@
 语音识别引擎使用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（CTranslate2 推理），
 替代原有的 FunASR（paraformer-zh + ct-punc），接口的入参、出参和返回结构完全不变。
 
+标点由独立的 [ct-punc](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch)
+（CT-Transformer，ONNX 推理）恢复：whisper 对中文标点不可靠，短音频可能整段没有标点，
+因此识别文本会统一过一遍标点模型，**保证接口输出的 `text` 一定带标点**。
+
 # 2. 输出SRT格式字幕
 示例：
 ```
@@ -38,8 +42,9 @@ uv sync
 uv run main.py
 ```
 
-> 首次启动会自动下载语音识别模型（默认 `large-v3`，约 3GB）到模型目录，需要联网；
-> 下载完成后会缓存到 `MODEL_DIR`，后续启动直接复用。容器部署时该目录已挂载到宿主机，不会丢失。
+> 首次启动会自动下载语音识别模型（默认 `large-v3`，约 3GB）和标点模型（ct-punc，约 295MB）到模型目录，
+> 需要联网；下载完成后会缓存到 `MODEL_DIR`，后续启动直接复用。
+> 容器部署时该目录已挂载到宿主机，不会丢失。
 
 # 4. 接口列表
 
@@ -103,6 +108,19 @@ uv run main.py
 | `ASR_BEAM_SIZE` | `5` | 解码束宽，越大越准但越慢 |
 | `ASR_VAD_FILTER` | `true` | 是否启用 VAD 静音过滤，可抑制空白音频上的幻觉文本 |
 | `ASR_CPU_THREADS` | `0` | CPU 推理线程数，`0` 表示自动（容器内按 cgroup 的 CPU 配额）；建议与 `cpus` 配额保持一致 |
+| `PUNCT_ENABLED` | `true` | 是否启用标点恢复；关闭后直接返回 whisper 自带的标点（不保证有标点） |
+| `PUNCT_MODEL` | `csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12` | 标点模型：下载源上的仓库名，或本地模型目录；默认约 295MB |
+| `PUNCT_MODEL_FILE` | `model.onnx` | 标点模型文件名（本地目录里也按该名字查找） |
+| `PUNCT_CPU_THREADS` | `0` | 标点模型的 ONNX 推理线程数，`0` 表示自动（容器内按 cgroup 的 CPU 配额） |
+
+# 6. 标点恢复说明
+
+- **只插入标点，绝不改动原字符**：输入里已有的标点会先被剔除，再统一由标点模型决定，
+  不会出现重复标点；数字、`~`、大写字母等模型词表外的字符原样保留。
+- 模型可输出 `，` `。` `？` `、` 四种标点，与分句逻辑共用同一套标点表，
+  因此「`utterances` 拼接（不含标点）」始终等于「`data.text` 去掉标点」，逐字一致。
+- 模型按 20 字一段推理；段内找不到句末标点时向后累积，超过 200 字才强制断句。
+- 已知局限：模型按词表判断，偶尔会在词组中间断句（例如把「保暖性」断成「保暖。性」）。
 
 # 6. 部署注意事项
 

@@ -21,6 +21,7 @@ import traceback
 from dataclasses import dataclass, field
 
 import config  # noqa: F401  # 必须先于 huggingface_hub 导入：config 中会设置 HF_ENDPOINT 下载镜像
+import helper
 from exceptions import CustomError, CustomException
 from logger import logger
 
@@ -107,42 +108,11 @@ def _create_model(device: str, compute_type: str) -> WhisperModel:
         compute_type=compute_type,
         download_root=config.MODEL_DIR,
         # 0 表示自动：容器内按 CPU 配额，否则交给 CTranslate2 自行决定
-        cpu_threads=config.ASR_CPU_THREADS or _cgroup_cpu_quota(),
+        cpu_threads=config.ASR_CPU_THREADS or helper.cgroup_cpu_quota(),
     )
 
     _verify_inference(model)
     return model
-
-def _cgroup_cpu_quota() -> int:
-    """读取 cgroup 的 CPU 配额（容器内有效）
-
-    容器里 os.cpu_count() 返回的是宿主机核心数，而不是 cpus 配额。线程数远超配额会引起
-    严重的线程争抢（实测模型加载耗时可以从 67s 恶化到 173s），因此优先按配额设置。
-
-    Returns:
-        int: 可用的 CPU 核数，读取不到时返回 0（表示交给 CTranslate2 自行决定）
-    """
-    try:
-        # cgroup v2：内容形如 "350000 100000" 或 "max 100000"
-        with open("/sys/fs/cgroup/cpu.max") as f:
-            quota, period = f.read().split()
-        if quota != "max":
-            return max(1, int(float(quota) / float(period)))
-    except Exception:
-        pass
-
-    try:
-        # cgroup v1：内容分别是配额和周期（微秒）
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as f:
-            quota = int(f.read().strip())
-        with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as f:
-            period = int(f.read().strip())
-        if quota > 0 and period > 0:
-            return max(1, quota // period)
-    except Exception:
-        pass
-
-    return 0
 
 def _verify_inference(model: WhisperModel) -> None:
     """用一段静音跑一次最短推理做自检

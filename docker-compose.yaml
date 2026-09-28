@@ -24,6 +24,12 @@ services:
       - ASR_LANGUAGE=zh
       # CPU 推理线程数，需与 cpus 配额匹配；留空或设为 0 则按 cgroup 配额自动设置
       - ASR_CPU_THREADS=3
+      # 标点恢复：whisper 对中文标点不可靠，开启后保证接口输出的 text 一定带标点
+      - PUNCT_ENABLED=true
+      # 标点模型（ct-punc ONNX），首次启动自动下载到 MODEL_DIR（约 295MB）
+      - PUNCT_MODEL=csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12
+      # 标点模型 ONNX 推理线程数，留空或设为 0 则按 cgroup 配额自动设置
+      - PUNCT_CPU_THREADS=3
       # 文件大小限制（字节），默认100MB
       - FILE_SIZE_LIMIT=104857600
     mem_limit: 8G     # 内存限制

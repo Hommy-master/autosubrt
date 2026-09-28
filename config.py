@@ -36,3 +36,17 @@ ASR_VAD_FILTER = os.getenv("ASR_VAD_FILTER", "true").lower() in ("1", "true", "y
 # CPU 推理线程数，0 表示自动（容器内按 cgroup 的 CPU 配额，否则交给 CTranslate2 自行决定）；
 # 线程数远超 CPU 配额会加剧线程争抢，反而拖慢模型加载，容器内建议显式设置
 ASR_CPU_THREADS = int(os.getenv("ASR_CPU_THREADS", "0"))
+
+# ===== 标点恢复（ct-punc ONNX）配置 =====
+
+# 是否启用标点恢复。whisper 对中文标点不可靠，开启后识别文本会统一过一遍标点模型，
+# 保证接口输出的 text 一定带标点；置为 false 则直接返回 whisper 自带的标点
+PUNCT_ENABLED = os.getenv("PUNCT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+# 标点模型：下载源上的仓库名，或本地模型目录
+PUNCT_MODEL = os.getenv(
+    "PUNCT_MODEL", "csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12"
+)
+# 标点模型文件名（本地目录里也按该名字查找）
+PUNCT_MODEL_FILE = os.getenv("PUNCT_MODEL_FILE", "model.onnx")
+# ONNX 推理线程数，0 表示自动（容器内按 cgroup 的 CPU 配额）
+PUNCT_CPU_THREADS = int(os.getenv("PUNCT_CPU_THREADS", "0"))
