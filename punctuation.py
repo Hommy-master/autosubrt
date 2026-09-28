@@ -218,7 +218,13 @@ def restore(text: str) -> str:
                 parts.append(_id2punct[label])
         index += 1
 
-    return "".join(parts)
+    result = "".join(parts).rstrip()
+
+    # 收尾兜底：模型偶尔在结尾不给标点，而接口要求 text 一定带标点
+    if result and result[-1] not in PUNCTUATIONS:
+        result += "。"
+
+    return result
 
 def _predict(ids: list[int]) -> list[int]:
     """对逐字 id 序列做标点预测

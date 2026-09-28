@@ -80,11 +80,11 @@ def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
         # 2. 执行音频转文本
         result = asr.transcribe(audio_file)
 
-        # 3. 按标点断句（标点缺失时按静音兜底）
-        utterances = split_utterances(result.chars, result.timestamps)
-
-        # 4. 补标点（whisper 对中文标点不可靠，统一由标点模型决定）
+        # 3. 补标点（whisper 对中文标点不可靠，统一由标点模型决定）
         text = punctuation.restore(result.text)
+
+        # 4. 按标点断句（标点跟随所属句子，静音兜底）；分句与完整文案是同一份标点
+        utterances = split_utterances(result.chars, result.timestamps, text)
         logger.info(
             f"ASR utterances success, text length: {len(result.chars)}, "
             f"utterances count: {len(utterances)}"
@@ -101,75 +101,148 @@ def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
     finally:
         _cleanup_audio_file(audio_file)
 
-def split_utterances(words, timestamps) -> list[dict]:
+def split_utterances(words, timestamps, punctuated: str = "") -> list[dict]:
     """把逐字时间线切分成一句话/一段话
 
     切分规则：
-    1. 优先按标点断句，标点只作为边界，不进入 utterance 文本；
-    2. 标点缺失时，与上一个字间隔超过 UTTERANCE_SILENCE_MS 的静音也会断句，
-       避免整段文案因为没有标点而合并成一条。
+    1. 优先按标点断句，标点跟随所属句子，因此各句拼接起来与 punctuated 完全一致；
+    2. 标点之间隔得过远时，用超过 UTTERANCE_SILENCE_MS 的静音兜底断句。
 
     Args:
         words: 逐字序列，与 timestamps 一一对应
         timestamps: 每个字的时间戳 [[开始毫秒, 结束毫秒], ...]
+        punctuated: 补过标点的完整文案；为空时退回识别结果自身
 
     Returns:
         list[dict]: [{'text': 句子文本, 'words': [{'text','start_time','end_time'}, ...]}, ...]
     """
+    # 标点没有时间戳，需要与逐字时间线对齐；不传文案时直接用识别结果
+    sequence = _align_sequence(words, timestamps, punctuated or ''.join(words))
+
     utterances = []
-    current = []
+    texts = []
+    sentence_words = []
+    last_end = None
 
-    for index, char in enumerate(words):
-        timestamp = timestamps[index] if index < len(timestamps) else None
+    for char, start, end, is_punct in sequence:
+        # 标点：结束当前句子，标点本身留在句子里
+        if is_punct:
+            texts.append(char)
+            # 句首的标点（异常输入）不单独成句，继续累积到下一句
+            if sentence_words:
+                utterances.append(_build_utterance(texts, sentence_words))
+                texts, sentence_words, last_end = [], [], None
+            continue
 
-        # 标点：结束当前句子，标点本身不作为一个字进入 utterance
-        if char in SENTENCE_PUNCTUATIONS:
-            current = _flush_utterance(utterances, current)
+        # 空白：只属于句子文本（英文单词之间），没有时间线
+        if char.isspace():
+            texts.append(char)
             continue
 
         # 静音兜底：与上一个字的间隔过大时断句
-        if current and timestamp and timestamp[0] - current[-1]['end_time'] > UTTERANCE_SILENCE_MS:
-            current = _flush_utterance(utterances, current)
+        if sentence_words and start is not None and last_end is not None \
+                and start - last_end > UTTERANCE_SILENCE_MS:
+            utterances.append(_build_utterance(texts, sentence_words))
+            texts, sentence_words, last_end = [], [], None
 
-        start_time, end_time = _word_times(timestamp, current)
-        current.append({'text': char, 'start_time': start_time, 'end_time': end_time})
+        # 时间戳缺失时退化为相邻字的结束时间，保证不丢字
+        fallback = last_end if last_end is not None else 0
+        start_time = fallback if start is None else start
+        end_time = start_time if end is None else end
 
-    _flush_utterance(utterances, current)
+        texts.append(char)
+        sentence_words.append({'text': char, 'start_time': start_time, 'end_time': end_time})
+        last_end = end_time
+
+    if sentence_words:
+        utterances.append(_build_utterance(texts, sentence_words))
+
     return utterances
 
-def _flush_utterance(utterances: list[dict], current: list[dict]) -> list[dict]:
-    """把当前累积的字收尾成一个 utterance，返回新的空累积列表
+def _build_utterance(texts: list[str], words: list[dict]) -> dict:
+    """组装一个 utterance
 
     Args:
-        utterances: 已完成的结果列表，会被原地追加
-        current: 当前累积的字
+        texts: 该句的字符（含标点）
+        words: 该句的字级时间线（不含标点）
 
     Returns:
-        list[dict]: 新的空累积列表
+        dict: {'text': 句子文本, 'words': 字级时间线}
     """
-    if current:
-        utterances.append({
-            'text': ''.join(word['text'] for word in current),
-            'words': current,
-        })
+    return {'text': ''.join(texts), 'words': words}
 
-    return []
+def _align_sequence(words, timestamps, punctuated: str) -> list[tuple]:
+    """把带标点的文案与逐字时间线对齐成一个待切分序列
 
-def _word_times(timestamp: list, current: list[dict]) -> tuple[int, int]:
-    """获取一个字的时间戳，缺失时退化为相邻字的结束时间，保证不丢字
+    补过标点的文案里，标点全部来自标点模型（识别结果自带的标点已先被剔除再重补），
+    没有时间戳；真实字与 words 中除标点外的字一一对应，取各自的时间戳。
 
     Args:
-        timestamp: 该字的时间戳，可能为 None
-        current: 当前累积的字
+        words: 逐字序列
+        timestamps: 每个字的时间戳
+        punctuated: 与 words 中除标点外的字逐字一致的带标点文案
 
     Returns:
-        tuple[int, int]: (开始时间, 结束时间)，单位毫秒
+        list[tuple]: [(字符, 开始毫秒, 结束毫秒, 是否标点), ...]，时间戳可能为 None
     """
-    if timestamp:
-        return timestamp[0], timestamp[1]
+    real = []
+    for index, char in enumerate(words):
+        if char in SENTENCE_PUNCTUATIONS:
+            continue
+        timestamp = timestamps[index] if index < len(timestamps) else None
+        real.append((
+            char,
+            timestamp[0] if timestamp else None,
+            timestamp[1] if timestamp else None,
+        ))
 
-    fallback = current[-1]['end_time'] if current else 0
-    return fallback, fallback
+    sequence = []
+    cursor = 0
+    for char in punctuated:
+        # 空白属于文案（英文单词之间），留在句子里，但不作为一个字
+        if char.isspace():
+            sequence.append((char, None, None, False))
+            continue
+
+        if char in SENTENCE_PUNCTUATIONS:
+            sequence.append((char, None, None, True))
+            continue
+
+        if cursor >= len(real) or real[cursor][0] != char:
+            # 理论上不会发生；真出现错位时退回识别结果本身，宁可少标点也不能串字
+            logger.warning("punctuated text mismatch, fall back to raw asr chars")
+            return _raw_sequence(words, timestamps)
+
+        sequence.append((char, real[cursor][1], real[cursor][2], False))
+        cursor += 1
+
+    if cursor != len(real):
+        logger.warning("punctuated text does not cover all asr chars, fall back to raw asr chars")
+        return _raw_sequence(words, timestamps)
+
+    return sequence
+
+def _raw_sequence(words, timestamps) -> list[tuple]:
+    """直接用识别结果构造待切分序列
+
+    Args:
+        words: 逐字序列
+        timestamps: 每个字的时间戳
+
+    Returns:
+        list[tuple]: [(字符, 开始毫秒, 结束毫秒, 是否标点), ...]
+    """
+    sequence = []
+    for index, char in enumerate(words):
+        timestamp = timestamps[index] if index < len(timestamps) else None
+        sequence.append((
+            char,
+            timestamp[0] if timestamp else None,
+            timestamp[1] if timestamp else None,
+            char in SENTENCE_PUNCTUATIONS,
+        ))
+
+    return sequence
 
 def asr_srt(audio_url: str) -> str:
     """
