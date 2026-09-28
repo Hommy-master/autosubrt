@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import router
-import service
+import asr
 import middlewares
 from logger import logger
 
@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI):
     # await start_redis()
     logger.info("✅ app start")
     # 在应用启动时加载模型
-    service.load_model()
+    asr.load_model()
     yield
     # ---------------- 关闭 ----------------
     # await close_db_pool()

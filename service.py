@@ -1,25 +1,20 @@
-from funasr import AutoModel
 from logger import logger
 from exceptions import CustomException, CustomError
 import traceback
 import helper
 import pysrt
 import config
+import asr
 import os
 import re
-
-
-# 加载模型（只加载一次）
-model = None
-punc_model = None
 
 def asr_text(audio_url: str) -> str:
     """
     语音 -> 纯文本
-    
+
     Args:
         audio_url: 音频URL
-    
+
     Returns:
         text: 纯文本
 
@@ -31,32 +26,11 @@ def asr_text(audio_url: str) -> str:
         # 1. 下载音频文件
         audio_file = helper.download(audio_url, config.TEMP_DIR)
 
-        # 2. 执行音频转文本
-        result = model.generate(input=audio_file)
-        
-        # 3. 提取文本结果
-        if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
-            text = result[0]["text"]
-            logger.info(f"ASR text success, text length: {len(text)}")
-            
-            # 4. 添加标点符号
-            global punc_model
-            if punc_model is not None:
-                try:
-                    punc_result = punc_model.generate(input=text)
-                    if isinstance(punc_result, list) and len(punc_result) > 0 and "text" in punc_result[0]:
-                        punctuated_text = punc_result[0]["text"]
-                        logger.info(f"Punctuation success, text length: {len(punctuated_text)}")
-                        return punctuated_text
-                except Exception as e:
-                    logger.error(f"Punctuation process failed: {str(e)}, detail: {traceback.format_exc()}")
-            
-            # 如果标点符号处理失败或未启用，返回原始文本
-            return text
-        else:
-            logger.warning("Empty ASR result")
-            return ""
-            
+        # 2. 执行音频转文本（faster-whisper 的输出自带标点，无需独立的标点模型）
+        result = asr.transcribe(audio_file)
+        logger.info(f"ASR text success, text length: {len(result.text)}")
+        return result.text
+
     except CustomException:
         # 自定义异常直接抛出
         raise
@@ -208,31 +182,6 @@ def add_subtitles(video_url: str, subtitle_url: str, subtitle_config) -> str:
                 except Exception as e:
                     logger.error(f"Failed to remove temporary file {temp_file}: {str(e)}")
 
-def load_model():
-    """加载语音识别模型"""
-    global model, punc_model
-    if model is None:
-        try:
-            logger.info("load paraformer-zh model...")
-            model = AutoModel(model="paraformer-zh", disable_update=True)
-            logger.info("paraformer-zh model load success")
-        except Exception as e:
-            logger.error(f"paraformer-zh model load failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            raise
-    
-    # 加载标点符号模型
-    if punc_model is None:
-        try:
-            logger.info("load ct-punc model...")
-            from funasr import AutoModel as AutoPuncModel
-            punc_model = AutoPuncModel(model="ct-punc", disable_update=True)
-            logger.info("ct-punc model load success")
-        except Exception as e:
-            logger.error(f"ct-punc model load failed: {str(e)}")
-            logger.error(traceback.format_exc())
-            # 标点符号模型加载失败不抛出异常，只记录日志
-
 def gen_download_url(file_path: str) -> str:
     """
     生成下载URL，将文件路径中的/app/替换成DOWNLOAD_URL
@@ -289,62 +238,60 @@ def add_remaining_sentence(words, valid_timestamps, sentence_start_idx, sentence
         sentence_text = ''.join(words[sentence_start_idx:])
         sentences.append((start_ms, end_ms, sentence_text))
 
-def add_fallback_sentence(words, valid_timestamps, text, sentences):
+def add_fallback_sentence(words, valid_timestamps, sentences):
     """添加后备句子（当无法正常分割时使用）"""
     if not sentences and words and valid_timestamps:
         start_ms = valid_timestamps[0][0]
         end_ms = valid_timestamps[-1][1]
         sentence_text = ''.join(words)
         sentences.append((start_ms, end_ms, sentence_text))
-    
+
     # 如果仍然没有句子，返回一个默认的条目
     if not sentences:
-        sentences.append((0, 30000, text))  # 假设30秒的持续时间
+        sentences.append((0, 30000, ''.join(words)))  # 假设30秒的持续时间
 
-def split_text_by_timestamp(text, timestamps):
-    """根据时间戳拆分文本，创建更准确的SRT条目"""
+def split_text_by_timestamp(words, timestamps):
+    """根据时间戳拆分文本，创建更准确的SRT条目
+
+    Args:
+        words: 逐字序列，与 timestamps 一一对应
+        timestamps: 每个字的时间戳 [[开始毫秒, 结束毫秒], ...]
+    """
     # 1. 过滤有效时间戳
     valid_timestamps = filter_valid_timestamps(timestamps)
-    
-    # 2. 分割文本为单词列表
-    words = text.split()
-    
-    # 3. 根据时间间隔分割句子
+
+    # 2. 根据时间间隔分割句子
     sentences, sentence_start_idx = segment_sentences_by_intervals(words, valid_timestamps)
-    
-    # 4. 添加剩余的单词作为一个句子
+
+    # 3. 添加剩余的单词作为一个句子
     add_remaining_sentence(words, valid_timestamps, sentence_start_idx, sentences)
-    
-    # 5. 添加后备句子（当无法正常分割时使用）
-    add_fallback_sentence(words, valid_timestamps, text, sentences)
-    
+
+    # 4. 添加后备句子（当无法正常分割时使用）
+    add_fallback_sentence(words, valid_timestamps, sentences)
+
     return sentences
 
-def extract_asr_result(result):
-    """从ASR结果中提取文本和时间戳"""
-    if isinstance(result, list) and len(result) > 0 and "text" in result[0]:
-        item = result[0]
-        text = item["text"]
-        timestamps = item.get("timestamp", [])
-        return text, timestamps
-    return None, None
+def create_srt_entries(words, timestamps):
+    """创建SRT条目
 
-def create_srt_entries(text, timestamps):
-    """创建SRT条目"""
+    Args:
+        words: 逐字序列，与 timestamps 一一对应
+        timestamps: 每个字的时间戳 [[开始毫秒, 结束毫秒], ...]
+    """
     subs = pysrt.SubRipFile()
-    
+
     # 调试用
-    logger.info(f"text: {text}, len(text): {len(text)}, len(timestamps): {len(timestamps)}")
-    
+    logger.info(f"len(words): {len(words)}, len(timestamps): {len(timestamps)}")
+
     # 拆分文本为句子级别的SRT条目
-    sentences = split_text_by_timestamp(text, timestamps)
-    
+    sentences = split_text_by_timestamp(words, timestamps)
+
     # 创建SRT条目
     for i, (start_ms, end_ms, sentence_text) in enumerate(sentences, 1):
         start_time = ms_to_subrip_time(start_ms)
         end_time = ms_to_subrip_time(end_ms)
         subs.append(pysrt.SubRipItem(index=i, start=start_time, end=end_time, text=sentence_text))
-    
+
     logger.info(f"Create {len(sentences)} SRT entries")
     return subs
 
@@ -352,21 +299,18 @@ def process_audio_to_srt(audio_path: str, srt_path: str):
     """处理音频文件并生成SRT字幕"""
     try:
         # 1. 使用模型生成识别结果
-        result = model.generate(input=audio_path)
-        
-        # 2. 提取ASR结果
-        text, timestamps = extract_asr_result(result)
-        
-        if text is not None:
-            # 3. 创建SRT条目
-            subs = create_srt_entries(text, timestamps)
-            
-            # 4. 保存SRT文件
-            subs.save(srt_path)
-            logger.info(f"SRT file saved: {srt_path}")
-        else:
-            logger.warning("Empty result")
-            
+        result = asr.transcribe(audio_path)
+
+        # 2. 创建SRT条目（chars 与 timestamps 一一对应）
+        subs = create_srt_entries(result.chars, result.timestamps)
+
+        # 3. 保存SRT文件
+        subs.save(srt_path)
+        logger.info(f"SRT file saved: {srt_path}")
+
+    except CustomException:
+        # 自定义异常直接抛出
+        raise
     except Exception as e:
         logger.error(f"Handle audio file failed: {str(e)}, detail: {traceback.format_exc()}")
         raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
@@ -429,15 +373,16 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
         _cleanup_audio_file(audio_file)
 
 def _get_asr_result(audio_url: str) -> tuple[str, list[list], str]:
-    """下载音频并获取 ASR 识别结果，返回 (文本, 时间戳, 临时音频路径)"""
+    """下载音频并获取 ASR 识别结果，返回 (逐字文本, 时间戳, 临时音频路径)"""
     audio_file = helper.download(audio_url, config.TEMP_DIR)
-    result = model.generate(input=audio_file)
-    
-    asr_text, timestamps = extract_asr_result(result)
-    
+    result = asr.transcribe(audio_file)
+
+    # text_plain 与 timestamps 一一对应，保证后续字级对齐的插值精度
+    asr_text, timestamps = result.text_plain, result.timestamps
+
     if asr_text and timestamps:
         logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
-    
+
     return asr_text, timestamps, audio_file
 
 def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:

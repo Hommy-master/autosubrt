@@ -12,8 +12,18 @@ services:
     environment:
       # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
       - DOWNLOAD_URL=https://autosubrt.jcaigc.cn/
-      # 指定语音识别模型的缓存目录
-      - MODELSCOPE_CACHE=/app/models
+      # 语音识别模型目录，首次启动会自动下载模型到此处
+      - MODEL_DIR=/app/models
+      # HuggingFace 模型下载源，默认使用国内镜像；海外部署可改为 https://huggingface.co
+      - HF_ENDPOINT=https://hf-mirror.com
+      # 识别模型：large-v3 / large-v3-turbo / medium / small
+      - ASR_MODEL=large-v3
+      # 推理设备与精度：auto 表示有 GPU 用 GPU(float16)，否则用 CPU(int8)
+      - ASR_DEVICE=auto
+      # 识别语言，zh 表示固定中文
+      - ASR_LANGUAGE=zh
+      # CPU 推理线程数，需与 cpus 配额匹配；留空或设为 0 则按 cgroup 配额自动设置
+      - ASR_CPU_THREADS=3
       # 文件大小限制（字节），默认100MB
       - FILE_SIZE_LIMIT=104857600
     mem_limit: 8G     # 内存限制

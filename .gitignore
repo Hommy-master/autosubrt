@@ -1,2 +1,8 @@
 /.qoder
 /.venv
+__pycache__/
+
+# 运行时产生的目录
+/temp
+/output
+/models
