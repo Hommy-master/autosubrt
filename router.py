@@ -6,6 +6,20 @@ import service
 
 router = APIRouter(prefix="/v1", tags=["v1"])
 
+@router.post("/asr", response_model=schemas.AsrResponse)
+def asr_utterances(request: schemas.AsrRequest):
+    """
+    语音 -> 完整文案 + 分句及逐字时间线
+    """
+
+    # 调用service层处理业务逻辑
+    text, utterances = service.asr_utterances(audio_url=request.audio_url)
+
+    return schemas.AsrResponse(
+        text=text,
+        utterances=[schemas.AsrUtteranceItem(**item) for item in utterances],
+    )
+
 @router.post("/asr/text", response_model=schemas.AsrTextResponse)
 def asr_text(asr: schemas.AsrTextRequest):
     """

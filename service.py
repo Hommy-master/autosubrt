@@ -8,6 +8,14 @@ import asr
 import os
 import re
 
+
+# 断句标点：只作为分句边界，不进入 utterance 文本
+# 与 split_text_by_punctuation_without_symbols 的分隔符保持一致（chars 不含空白字符，故无需 \n\r）
+SENTENCE_PUNCTUATIONS = set("。！？，；.!?,;:")
+
+# 标点缺失时，用超过该阈值（毫秒）的静音兜底断句
+UTTERANCE_SILENCE_MS = 500
+
 def asr_text(audio_url: str) -> str:
     """
     语音 -> 纯文本
@@ -45,6 +53,115 @@ def asr_text(audio_url: str) -> str:
                 logger.info(f"Temporary audio file cleaned up: {audio_file}")
             except Exception as e:
                 logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
+
+def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
+    """
+    语音 -> 完整文案 + 分句及逐字时间线
+
+    Args:
+        audio_url: 音频URL
+
+    Returns:
+        tuple: (完整文案, utterances 列表)
+
+    Raises:
+        CustomException: 自定义异常
+    """
+    audio_file = None
+    try:
+        # 1. 下载音频文件
+        audio_file = helper.download(audio_url, config.TEMP_DIR)
+
+        # 2. 执行音频转文本
+        result = asr.transcribe(audio_file)
+
+        # 3. 按标点断句（标点缺失时按静音兜底）
+        utterances = split_utterances(result.chars, result.timestamps)
+        logger.info(
+            f"ASR utterances success, text length: {len(result.chars)}, "
+            f"utterances count: {len(utterances)}"
+        )
+
+        return result.text, utterances
+
+    except CustomException:
+        # 自定义异常直接抛出
+        raise
+    except Exception as e:
+        logger.error(f"ASR utterances process failed: {str(e)}, detail: {traceback.format_exc()}")
+        raise CustomException(err=CustomError.RECOGNIZE_AUDIO_FAILED)
+    finally:
+        _cleanup_audio_file(audio_file)
+
+def split_utterances(words, timestamps) -> list[dict]:
+    """把逐字时间线切分成一句话/一段话
+
+    切分规则：
+    1. 优先按标点断句，标点只作为边界，不进入 utterance 文本；
+    2. 标点缺失时，与上一个字间隔超过 UTTERANCE_SILENCE_MS 的静音也会断句，
+       避免整段文案因为没有标点而合并成一条。
+
+    Args:
+        words: 逐字序列，与 timestamps 一一对应
+        timestamps: 每个字的时间戳 [[开始毫秒, 结束毫秒], ...]
+
+    Returns:
+        list[dict]: [{'text': 句子文本, 'words': [{'text','start_time','end_time'}, ...]}, ...]
+    """
+    utterances = []
+    current = []
+
+    for index, char in enumerate(words):
+        timestamp = timestamps[index] if index < len(timestamps) else None
+
+        # 标点：结束当前句子，标点本身不作为一个字进入 utterance
+        if char in SENTENCE_PUNCTUATIONS:
+            current = _flush_utterance(utterances, current)
+            continue
+
+        # 静音兜底：与上一个字的间隔过大时断句
+        if current and timestamp and timestamp[0] - current[-1]['end_time'] > UTTERANCE_SILENCE_MS:
+            current = _flush_utterance(utterances, current)
+
+        start_time, end_time = _word_times(timestamp, current)
+        current.append({'text': char, 'start_time': start_time, 'end_time': end_time})
+
+    _flush_utterance(utterances, current)
+    return utterances
+
+def _flush_utterance(utterances: list[dict], current: list[dict]) -> list[dict]:
+    """把当前累积的字收尾成一个 utterance，返回新的空累积列表
+
+    Args:
+        utterances: 已完成的结果列表，会被原地追加
+        current: 当前累积的字
+
+    Returns:
+        list[dict]: 新的空累积列表
+    """
+    if current:
+        utterances.append({
+            'text': ''.join(word['text'] for word in current),
+            'words': current,
+        })
+
+    return []
+
+def _word_times(timestamp: list, current: list[dict]) -> tuple[int, int]:
+    """获取一个字的时间戳，缺失时退化为相邻字的结束时间，保证不丢字
+
+    Args:
+        timestamp: 该字的时间戳，可能为 None
+        current: 当前累积的字
+
+    Returns:
+        tuple[int, int]: (开始时间, 结束时间)，单位毫秒
+    """
+    if timestamp:
+        return timestamp[0], timestamp[1]
+
+    fallback = current[-1]['end_time'] if current else 0
+    return fallback, fallback
 
 def asr_srt(audio_url: str) -> str:
     """

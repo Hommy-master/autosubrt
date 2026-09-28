@@ -69,3 +69,23 @@ class AsrTextAlignResponse(BaseModel):
     timelines: list[TimelineItem] = Field(..., description="对应的时间线列表")
     words: list[str] = Field(default=[], description="字数组（按顺序排列的每个字）")
     words_timelines: list[WordTimelineItem] = Field(default=[], description="每个字对应的时间线（与 words 数组一一对应）")
+
+class AsrWordItem(BaseModel):
+    """字级时间线项"""
+    text: str = Field(..., description="字")
+    start_time: int = Field(..., description="开始时间 (毫秒)")
+    end_time: int = Field(..., description="结束时间 (毫秒)")
+
+class AsrUtteranceItem(BaseModel):
+    """一句话/一段话"""
+    text: str = Field(default="", description="一句话或一段话的文本")
+    words: list[AsrWordItem] = Field(default=[], description="该句话中每个字的时间线")
+
+class AsrRequest(BaseModel):
+    """语音 -> 完整文案及逐字时间线请求参数"""
+    audio_url: str = Field(..., description="音频文件URL")
+
+class AsrResponse(BaseModel):
+    """语音 -> 完整文案及逐字时间线响应参数"""
+    text: str = Field(default="", description="完整文案")
+    utterances: list[AsrUtteranceItem] = Field(default=[], description="分句结果及每个字的时间线")

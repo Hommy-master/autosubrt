@@ -45,11 +45,48 @@ uv run main.py
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| POST | `/openapi/autosubrt/v1/asr` | 语音 -> 完整文案 + 分句及逐字时间线 |
 | POST | `/openapi/autosubrt/v1/asr/text` | 语音 -> 纯文本（自带标点） |
 | POST | `/openapi/autosubrt/v1/asr/srt` | 语音 -> SRT 字幕文件 |
 | POST | `/openapi/autosubrt/v1/asr/text/align` | 语音 + 文本 -> 对齐后的字幕时间线、字级时间线 |
 | POST | `/openapi/autosubrt/v1/video/add_subtitles` | 为视频添加字幕 |
 | GET | `/openapi/autosubrt/v1/health` | 健康检查 |
+
+## 4.1 `POST /openapi/autosubrt/v1/asr`
+
+请求：
+
+```json
+{ "audio_url": "http://example.com/audio.wav" }
+```
+
+响应（时间为毫秒）：
+
+```json
+{
+  "code": 0,
+  "message": "成功",
+  "data": {
+    "text": "你们应该都听过啊，羊毛羊绒当中的软黄金。",
+    "utterances": [
+      {
+        "text": "你们应该都听过啊",
+        "words": [
+          { "text": "你", "start_time": 280, "end_time": 400 },
+          { "text": "们", "start_time": 400, "end_time": 520 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+说明：
+
+- `data.text` 是完整文案；`data.utterances[].text` 是分句文本，其 `words[]` 为该句每个字的时间线，**标点不计入** `text` 和 `words`（标点仍会出现在 `data.text` 中）。
+- 分句规则：**标点优先**，遇到 `。！？，；.!?,;:` 断句；无标点时**静音兜底**，相邻两字间隔超过 500ms 即断句。
+- `utterances` 各句按顺序拼接（忽略标点）后与 `data.text` 逐字一致。
+- 响应外层 `{code, message, data}` 为全局统一封装，与其它接口一致。
 
 # 5. 环境变量
 
