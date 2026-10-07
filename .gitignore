@@ -5,6 +5,7 @@ __pycache__/
 # 运行时产生的目录
 /temp
 /models
+/logs
 
 # 测试与工具缓存
 .pytest_cache/

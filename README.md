@@ -174,6 +174,9 @@ Content-Disposition: attachment; filename="subtitle.srt"
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `FILE_SIZE_LIMIT` | `104857600` | 下载文件大小限制（字节），默认 100MB |
+| `LOG_DIR` | 项目下的 `logs` 目录 | 日志目录；容器内为 `/app/logs`，已挂载到宿主机，详见 7.6 |
+| `LOG_MAX_BYTES` | `10485760` | 单个日志文件的大小上限（字节），默认 10MB，超过后轮转 |
+| `LOG_BACKUP_COUNT` | `10` | 轮转后保留的历史日志文件数量 |
 | `MODEL_DIR` | 项目下的 `models` 目录 | 语音识别模型目录，首次启动自动下载到此处 |
 | `TEMP_CLEAN_ON_START` | `true` | 启动时清空临时目录，回收上次进程被强杀时残留的音频文件；仅当临时目录为进程私有（单进程、未挂载）时可开启，详见 7.5 |
 | `TEMP_RETENTION_SECONDS` | `21600` | 兜底清理：删除临时目录中超过该时长（秒）未更新的文件；`0` 表示关闭 |
@@ -207,7 +210,10 @@ Content-Disposition: attachment; filename="subtitle.srt"
 # 7. 部署注意事项
 
 ## 7.1 启动耗时
-首次启动需要联网下载模型（`large-v3` 约 3GB），下载完成后仍需把模型加载进内存。
+**Python 依赖已全部打进镜像，启动阶段不会联网安装任何依赖**：构建时用 `uv sync --no-dev` 装好，
+启动命令直接用镜像内 `.venv` 的 `python`（不再走 `uv run`——它会隐式执行一次 `uv sync`，
+且默认带上 dev 组去 PyPI 补装 `pytest` 等依赖，导致每次启动都要联网、在国内网络下长时间卡在下载）。
+启动阶段唯一需要联网的是**首次下载模型**（`large-v3` 约 3GB），下载完成后仍需把模型加载进内存。
 模型越大加载越久，请给容器留出足够长的启动/健康检查宽限期，避免被编排系统判定为启动失败。
 
 如果启动耗时不可接受，可以预先在 `MODEL_DIR` 中放一份已经转换好的 CTranslate2 模型，
@@ -244,6 +250,20 @@ Content-Disposition: attachment; filename="subtitle.srt"
   因此**不会误删正在处理的请求**；清理只针对普通文件，不递归子目录、不动符号链接。
 - **`temp/` 必须是进程私有目录**：如果将来启用多 worker，或把 `TEMP_DIR` 挂载到多个容器共享的卷，
   每个进程启动时都会删掉别人在途的文件，此时必须设置 `TEMP_CLEAN_ON_START=false`（周期清理可以保留）。
-- `docker-compose.yaml` 里容器日志也做了轮转（`max-size=10m, max-file=3`），避免 json-file 日志无限增长。
-- `temp/` 位于容器可写层（未挂载到宿主机），服务不再往宿主机写任何文件；compose 中原先挂载站点
-  `output` 目录的配置已随之移除，宿主机上历史遗留的 SRT 文件不再被覆盖，可自行清理。
+- `temp/` 位于容器可写层（未挂载到宿主机），除日志（见 7.6）外服务不往宿主机写任何文件；
+  compose 中原先挂载站点 `output` 目录的配置已随之移除，宿主机上历史遗留的 SRT 文件不再被覆盖，可自行清理。
+
+## 7.6 日志
+
+日志**同时写 stdout 和文件**，文件默认落在 `logs/` 目录（容器内 `/app/logs`，由 `LOG_DIR` 控制）。
+单个文件超过 `LOG_MAX_BYTES`（默认 10MB）后轮转为 `autosubrt.log.1`，
+最多保留 `LOG_BACKUP_COUNT`（默认 10）个历史文件，即总量上限约 110MB。
+
+- 文件日志由 `logger.py` 里的 `RotatingFileHandler` 输出，格式与 `docker logs` 完全一致。
+- uvicorn 的启动与访问日志同样落盘：`uvicorn.run(..., log_config=None)` 不让 uvicorn 用自带配置
+  覆盖 `logger.py` 中的 handler，否则这些日志只会打在 stdout 上。
+- `docker-compose.yaml` 把 `./logs` 挂载到 `/app/logs`，宿主机可直接 `tail -f logs/autosubrt.log`，
+  容器重建（`docker compose down` 后再 `up`）日志也不丢；去掉该挂载则日志只存在于容器内。
+- `docker-compose.yaml` 里容器标准输出（json-file）也做了轮转（`max-size=10m, max-file=3`），
+  避免 json-file 日志无限增长。注意该轮转会**删除**旧的 `docker logs`，需要长期保留请看日志文件。
+- **多进程下日志文件会有轮转竞争**（每个进程各自轮转同一个文件），将来启用多 worker 时需另行处理，详见 7.4。

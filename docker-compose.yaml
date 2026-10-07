@@ -7,6 +7,7 @@ services:
     volumes:
       # SRT 改为接口直传后容器不再写文件，原先挂载站点 output 目录的配置已移除
       - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/models/asr_models:/app/models  # 挂载语音识别模型数据
+      - ./logs:/app/logs  # 挂载日志目录（对应 LOG_DIR 的默认值 /app/logs），宿主机可直接查看，容器重建也不丢
     environment:
       # 语音识别模型目录，首次启动会自动下载模型到此处
       - MODEL_DIR=/app/models
@@ -43,10 +44,23 @@ services:
       - TEMP_RETENTION_SECONDS=21600
       # 周期清理的执行间隔（秒），默认 30 分钟，0 表示不启动后台清理任务
       - CLEANUP_INTERVAL_SECONDS=1800
+      # 日志目录，默认 /app/logs（已挂载到宿主机 ./logs）；下面的两个值决定轮转策略
+      #- LOG_DIR=/app/logs
+      # 单个日志文件上限（字节），默认 10MB
+      #- LOG_MAX_BYTES=10485760
+      # 轮转后保留的历史日志数量，默认 10 个
+      #- LOG_BACKUP_COUNT=10
     mem_limit: 8G     # 内存限制
     memswap_limit: 8G # 总内存（物理内存 + Swap）限制
     cpus: '3.5'       # CPU使用率限制为150%，即容器最多可以使用1.5个完整的CPU核心
     oom_score_adj: -500  # 调整 OOM 杀手优先级
     restart: unless-stopped  # 除非手动停止，否则总是重启容器
     container_name: autosubrt # 这里指容器名称，非必需，不指定时，名称为：<项目名称>-<服务名称>-<序号>
+    # 容器 stdout（docker logs）的轮转，避免 json-file 无限增长；
+    # 应用自身的日志文件另有轮转，见 LOG_MAX_BYTES / LOG_BACKUP_COUNT
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     #entrypoint: ["/bin/sh", "-c", "sleep 10000"]

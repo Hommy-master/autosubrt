@@ -17,24 +17,25 @@ RUN uv --version
 # 设置工作目录
 WORKDIR /app
 
-# 创建非root用户并提前配置缓存目录
-RUN mkdir -p /root/.cache/uv
-
 # 从CI构建的dist目录复制所有文件
 COPY dist/ .
 
-# 安装依赖（仍使用root用户确保权限）
+# 安装依赖（仍使用root用户确保权限）；--no-dev 只装运行依赖，容器里不需要 pytest
 RUN uv sync --no-dev --no-cache && uv cache prune
+
+# 校验运行依赖已完整进入镜像：缺依赖在构建阶段就报错，而不是等容器启动才发现
+RUN /app/.venv/bin/python -c "import main"
 
 # 暴露应用端口
 EXPOSE 30000
 
-# 设置环境变量，指定uv缓存目录和用户主目录
+# 设置环境变量：PATH 指向镜像内虚拟环境，PYTHONUNBUFFERED 保证日志实时输出
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    HOME="/root" \
-    UV_CACHE_DIR="/root/.cache/uv"
+    HOME="/root"
 
-# 启动命令
-CMD ["uv", "run", "main.py", "--workers", "4"]
+# 启动命令：直接用镜像内 .venv 的 python，不走 uv。
+# uv run 会隐式执行一次 uv sync，且默认带上 dev 组去 PyPI 补装 pytest 等依赖，
+# 于是每次启动都要联网下载（国内网络下会长时间卡住），详见 README 7.1
+CMD ["python", "main.py", "--workers", "4"]

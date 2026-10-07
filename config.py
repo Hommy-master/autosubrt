@@ -10,6 +10,15 @@ MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "mode
 # 文件大小限制，默认为100MB (100 * 1024 * 1024 字节)
 FILE_SIZE_LIMIT = int(os.getenv("FILE_SIZE_LIMIT", str(100 * 1024 * 1024)))
 
+# ===== 日志配置 =====
+
+# 日志目录，默认项目下的 logs 目录；容器部署时该目录已挂载到宿主机，容器重建日志也不丢
+LOG_DIR = os.getenv("LOG_DIR", os.path.join(os.path.dirname(__file__), "logs"))
+# 单个日志文件的大小上限（字节），默认 10MB，超过后轮转
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", str(10 * 1024 * 1024)))
+# 轮转后保留的历史文件数量，默认 10 个（autosubrt.log.1 ~ autosubrt.log.10）
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "10"))
+
 # ===== 语音识别（faster-whisper）配置 =====
 
 # 模型下载源，默认使用国内镜像 hf-mirror，部署在海外时可改为 https://huggingface.co
