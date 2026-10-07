@@ -60,5 +60,5 @@ if __name__ == "__main__":
     logger.info("Start AutoSubRT Service ...")
     # log_config=None：不让 uvicorn 用自己的配置覆盖 logger.py 里的 handler，
     # 否则 uvicorn 的启动与访问日志只会打到 stdout，不会写进日志文件
-    uvicorn.run(app, host="0.0.0.0", port=30001, lifespan="on", log_config=None)
+    uvicorn.run(app, host="0.0.0.0", port=30000, lifespan="on", log_config=None)
     logger.info("AutoSubRT Service stopped")
