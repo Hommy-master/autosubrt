@@ -1,5 +1,13 @@
 FROM python:3.11-slim
 
+# 内置北京时区：slim 镜像不含 tzdata，仅设 TZ 环境变量无法解析，需一并安装并写入时区文件
+ENV TZ=Asia/Shanghai
+RUN DEBIAN_FRONTEND=noninteractive apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
+    && rm -rf /var/lib/apt/lists/*
+
 # 使用pip安装uv
 RUN pip install --no-cache-dir uv
 

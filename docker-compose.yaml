@@ -7,8 +7,7 @@ services:
     volumes:
       # SRT 改为接口直传后容器不再写文件，原先挂载站点 output 目录的配置已移除
       - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/models/asr_models:/app/models  # 挂载语音识别模型数据
-      - /etc/localtime:/etc/localtime:ro  # 挂载主机时区
-      - /etc/timezone:/etc/timezone:ro    # 挂载时区名称（可选）
+      # 时区已在镜像内固化为北京时间（见 Dockerfile），无需再挂载宿主机的 /etc/localtime
     environment:
       # 语音识别模型目录，首次启动会自动下载模型到此处
       - MODEL_DIR=/app/models
