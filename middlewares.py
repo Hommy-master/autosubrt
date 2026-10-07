@@ -1,5 +1,5 @@
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from exceptions import CustomError, CustomException
 from starlette.middleware.base import BaseHTTPMiddleware
 from logger import logger
@@ -111,36 +111,53 @@ class ResponseMiddleware(BaseHTTPMiddleware):
         """检查是否为JSON响应"""
         return response.headers.get('content-type') == 'application/json'
 
+    def _rebuild_response(self, response, body: bytes):
+        """用读到的 body 重建响应
+
+        原 response 的 body_iterator 一旦被本中间件读完就成了空迭代器，
+        再直接返回原对象会让客户端收到空响应体，因此必须重建。
+        """
+        rebuilt = Response(
+            content=body,
+            status_code=response.status_code,
+            media_type=response.headers.get('content-type', 'application/json'),
+        )
+        # 除 content-length / content-type 外（这两个由新响应按实际内容重算）的头部原样透传
+        for key, value in response.headers.items():
+            if key.lower() not in ('content-length', 'content-type'):
+                rebuilt.headers[key] = value
+        return rebuilt
+
     async def _process_json_response(self, response, lang: str):
         """处理JSON响应并统一格式"""
         body = [section async for section in response.body_iterator]
         if not body:
             return response
-            
+
         body_str = b''.join(body).decode()
-        
+
         try:
             data = json.loads(body_str)
-            
-            # 如果响应已经有统一格式，直接返回
+
+            # 如果响应已经有统一格式，原样透传（如 /health）
             if 'code' in data and 'message' in data:
-                return response
-                
+                return self._rebuild_response(response, b''.join(body))
+
             # 创建统一格式的响应（成功响应保留data字段）
             unified_response = {
                 'code': CustomError.SUCCESS.code,
                 'message': CustomError.SUCCESS.as_dict(lang=lang)['message'],
                 'data': data
             }
-            
+
             return JSONResponse(
                 status_code=response.status_code,
                 content=unified_response
             )
-            
+
         except json.JSONDecodeError:
             logger.warning(f"JSON decode error: {body_str}")
-            return response
+            return self._rebuild_response(response, b''.join(body))
 
     def _handle_custom_exception(self, e: CustomException, lang: str) -> JSONResponse:
         """处理自定义异常（不包含data字段）"""
