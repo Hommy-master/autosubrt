@@ -4,7 +4,6 @@ import os
 
 # 临时目录，用在缓存临时文件
 TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp")
-VIDEO_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output", "video")
 SRT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output", "srt")
 # 语音识别模型目录，首次启动会自动下载模型到此处
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "models"))

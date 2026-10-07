@@ -55,7 +55,6 @@ uv run main.py
 | POST | `/openapi/autosubrt/v1/asr/text` | 语音 -> 纯文本（自带标点） |
 | POST | `/openapi/autosubrt/v1/asr/srt` | 语音 -> SRT 字幕文件 |
 | POST | `/openapi/autosubrt/v1/asr/text/align` | 语音 + 文本 -> 对齐后的字幕时间线、字级时间线 |
-| POST | `/openapi/autosubrt/v1/video/add_subtitles` | 为视频添加字幕 |
 | GET | `/openapi/autosubrt/v1/health` | 健康检查 |
 
 ## 4.1 `POST /openapi/autosubrt/v1/asr`

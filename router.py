@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 from logger import logger
 import schemas
 import service
@@ -97,21 +97,6 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
         words=words, 
         words_timelines=words_timeline_items
     )
-
-@router.post("/video/add_subtitles", response_model=schemas.AddSubtitlesResponse)
-def add_subtitles(request: Request, params: schemas.AddSubtitlesRequest):
-    """
-    为视频添加字幕
-    """
-
-    # 调用service层处理业务逻辑
-    video_url = service.add_subtitles(
-        video_url=params.video,
-        subtitle_url=params.subtitle_url,
-        subtitle_config=params.subtitle_config
-    )
-
-    return schemas.AddSubtitlesResponse(video_url=video_url)
 
 # 健康检查端点
 @router.get("/health", summary="健康检查")
