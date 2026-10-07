@@ -16,6 +16,9 @@ services:
       - MODEL_DIR=/app/models
       # HuggingFace 模型下载源，默认使用国内镜像；海外部署可改为 https://huggingface.co
       - HF_ENDPOINT=https://hf-mirror.com
+      # Xet 传输协议：开启后会直连 cas-server.xethub.hf.co，用镜像时该服务返回 401 导致大模型下载失败，
+      # 因此非官方源下 config.py 已自动关闭（见 config.py 中的说明）；如需强制开关可在此显式指定
+      #- HF_HUB_DISABLE_XET=1
       # 识别模型：large-v3 / large-v3-turbo / medium / small
       - ASR_MODEL=large-v3
       # 推理设备与精度：auto 表示有 GPU 用 GPU(float16)，否则用 CPU(int8)

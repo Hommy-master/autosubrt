@@ -104,6 +104,7 @@ uv run main.py
 | `FILE_SIZE_LIMIT` | `104857600` | 下载文件大小限制（字节），默认 100MB |
 | `MODEL_DIR` | 项目下的 `models` 目录 | 语音识别模型目录，首次启动自动下载到此处 |
 | `HF_ENDPOINT` | `https://hf-mirror.com` | 模型下载源；海外部署可改为 `https://huggingface.co` |
+| `HF_HUB_DISABLE_XET` | 非官方源为 `1`，官方源为 `0` | 是否启用 Xet 传输协议。Xet 不受 `HF_ENDPOINT` 影响，块数据要直连 `cas-server.xethub.hf.co`，用镜像时会被拒（401）导致大文件下载失败，因此非官方源下自动关闭 |
 | `ASR_MODEL` | `large-v3` | 模型：`large-v3` / `large-v3-turbo` / `medium` / `small`，也可填本地模型路径 |
 | `ASR_DEVICE` | `auto` | 推理设备：`auto` / `cpu` / `cuda`；`auto` 表示有 GPU 用 GPU，否则用 CPU |
 | `ASR_COMPUTE_TYPE` | `auto` | 计算精度：`auto` / `int8` / `float16` / `float32`；`auto` 表示 GPU 用 float16、CPU 用 int8 |

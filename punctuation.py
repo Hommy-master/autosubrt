@@ -21,7 +21,7 @@ import os
 import numpy as np
 import onnxruntime
 
-import config  # noqa: F401  # 必须先于 huggingface_hub 导入：config 中会设置 HF_ENDPOINT 下载镜像
+import config  # noqa: F401  # 必须先于 huggingface_hub 导入：config 中会设置 HF_ENDPOINT / HF_HUB_DISABLE_XET
 import helper
 from exceptions import CustomError, CustomException
 from logger import logger

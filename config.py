@@ -21,6 +21,17 @@ FILE_SIZE_LIMIT = int(os.getenv("FILE_SIZE_LIMIT", str(100 * 1024 * 1024)))
 # 该环境变量必须在导入 huggingface_hub 之前设置，因此统一放在 config 中处理
 os.environ.setdefault("HF_ENDPOINT", os.getenv("HF_ENDPOINT", "https://hf-mirror.com"))
 
+# Xet 传输协议（hf_xet）不受 HF_ENDPOINT 影响：元数据从下载源获取，块数据却要直连
+# cas-server.xethub.hf.co，镜像拿到的是匿名令牌，该服务会直接返回 401 Unauthorized。
+# Xet 只覆盖部分大文件（large-v3 的 model.bin、标点模型的 model.onnx），症状是
+# 「小文件能下、大文件 401、服务启动失败」，因此非官方源一律关闭，回退到下载源支持的
+# 普通 HTTP 下载（resolve 302 到带签名的直链，无需令牌）；直连官方源时保留 Xet 以享受
+# 分块去重。同样必须在导入 huggingface_hub 之前设置，可用 HF_HUB_DISABLE_XET 显式覆盖
+if "HF_HUB_DISABLE_XET" not in os.environ:
+    os.environ["HF_HUB_DISABLE_XET"] = (
+        "0" if "huggingface.co" in os.environ["HF_ENDPOINT"] else "1"
+    )
+
 # 模型名称或本地模型路径，可选：large-v3 / large-v3-turbo / medium / small
 ASR_MODEL = os.getenv("ASR_MODEL", "large-v3")
 # 推理设备：auto / cpu / cuda，auto 表示有 GPU 用 GPU，否则用 CPU
