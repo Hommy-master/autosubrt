@@ -10,6 +10,16 @@ MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "mode
 # 文件大小限制，默认为100MB (100 * 1024 * 1024 字节)
 FILE_SIZE_LIMIT = int(os.getenv("FILE_SIZE_LIMIT", str(100 * 1024 * 1024)))
 
+# ===== 并发限流配置 =====
+
+# ASR 接口的最大并发请求数，超出后直接返回「服务器忙」，不排队。
+# 单个请求的峰值内存与音频时长成正比（解码后的 float32 音频、VAD 的整段拷贝、逐段梅尔特征、
+# 推理工作区），长音频下可到 1GB 量级，而模型本身还常驻约 1.5GB；FastAPI 的同步端点默认
+# 最多 40 个线程并发，不限流时几个长音频同时进来就会顶到容器内存上限被 OOM 杀掉。
+# 取值需结合 mem_limit 估算：MAX_CONCURRENCY × 单请求峰值 + 模型常驻 < mem_limit
+# <= 0 表示不限流
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "6"))
+
 # ===== 日志配置 =====
 
 # 日志目录，默认项目下的 logs 目录；容器部署时该目录已挂载到宿主机，容器重建日志也不丢

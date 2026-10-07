@@ -32,6 +32,10 @@ services:
       - PUNCT_CPU_THREADS=3
       # 文件大小限制（字节），默认100MB
       - FILE_SIZE_LIMIT=104857600
+      # ASR 接口最大并发数，超出直接返回 9997「服务器忙，请稍后重试」，不排队。
+      # 单个请求长音频下峰值内存可达 1GB，需满足 MAX_CONCURRENCY × 单请求峰值 + 模型 1.5GB < mem_limit；
+      # 设为 0 表示不限流（会退回 FastAPI 默认的 40 线程并发，极易 OOM，不建议）
+      - MAX_CONCURRENCY=6
       # 计费：开启后所有 ASR 接口必须传 apiKey，并按音频时长扣费（积分）
       # 只认 true/false，写成 1 会被当成 false 从而关闭计费（启动日志会打印生效值）
       - ENABLE_APIKEY=true

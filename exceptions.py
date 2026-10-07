@@ -20,6 +20,8 @@ class CustomError(Enum):
     INVALID_APIKEY = (2036, "无效的 apiKey，请登录官网 https://jcaigc.cn 获取", "Invalid apiKey. Please log in at https://jcaigc.cn to obtain one")
 
     # ===== 系统错误码 (9000-9999) =====
+    # 并发数已达上限：请求没有排队，调用方稍后重试即可（不是参数或业务错误，故不在 2xxx）
+    SERVER_BUSY = (9997, "服务器忙，请稍后重试", "Server is busy, please try again later")
     INTERNAL_SERVER_ERROR = (9998, "系统内部错误", "Internal server error")
     UNKNOWN_ERROR = (9999, "未知异常", "Unknown error")
 

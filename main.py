@@ -22,6 +22,12 @@ async def lifespan(app: FastAPI):
         config.ENABLE_APIKEY,
         config.POINTS_PER_SECOND,
     )
+    # 同上，把限流的生效值打出来：0 表示不限流，容易被误当成「限制为 0」而反复排查
+    logger.info(
+        "Concurrency: MAX_CONCURRENCY=%s%s",
+        config.MAX_CONCURRENCY,
+        "（不限流）" if config.MAX_CONCURRENCY <= 0 else "",
+    )
     # 先清理上次被强杀时残留的临时文件，再去加载模型，避免磁盘被残留文件占满
     await cleanup.start()
     # 在应用启动时加载模型

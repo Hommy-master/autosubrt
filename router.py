@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 from fastapi.responses import Response
 from logger import logger
+import concurrency
 import schemas
 import service
 
@@ -18,8 +19,9 @@ def asr_utterances(request: schemas.AsrRequest):
     语音 -> 完整文案 + 分句及逐字时间线
     """
 
-    # 调用service层处理业务逻辑
-    text, utterances = service.asr_utterances(audio_url=request.audio_url, api_key=request.apiKey)
+    # 调用service层处理业务逻辑（并发受限，超出上限直接返回「服务器忙」）
+    with concurrency.limit():
+        text, utterances = service.asr_utterances(audio_url=request.audio_url, api_key=request.apiKey)
 
     return schemas.AsrResponse(
         text=text,
@@ -32,11 +34,12 @@ def asr_text(asr: schemas.AsrTextRequest):
     语音 -> 纯文本
     """
     
-    # 调用service层处理业务逻辑
-    text = service.asr_text(
-        audio_url=asr.audio_url,
-        api_key=asr.apiKey,
-    )
+    # 调用service层处理业务逻辑（并发受限，超出上限直接返回「服务器忙」）
+    with concurrency.limit():
+        text = service.asr_text(
+            audio_url=asr.audio_url,
+            api_key=asr.apiKey,
+        )
 
     return schemas.AsrTextResponse(text=text)
 
@@ -49,10 +52,12 @@ def asr_srt(asr: schemas.AsrSrtRequest):
     失败时仍由 ResponseMiddleware 返回统一的 JSON 错误体，调用方按 Content-Type 区分。
     """
 
-    srt_text = service.asr_srt(
-        audio_url=asr.audio_url,
-        api_key=asr.apiKey,
-    )
+    # 并发受限，超出上限直接返回「服务器忙」
+    with concurrency.limit():
+        srt_text = service.asr_srt(
+            audio_url=asr.audio_url,
+            api_key=asr.apiKey,
+        )
 
     logger.info(f"generate srt success, length: {len(srt_text)}")
     return Response(
@@ -70,13 +75,14 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
     根据音频对齐给定文本的时间线
     """
     
-    # 调用 service 层处理业务逻辑
-    texts, timelines, char_timelines = service.align_text_with_audio(
-        audio_url=request.audio_url,
-        text=request.text,
-        max_chars_per_line=request.max_chars_per_line,
-        api_key=request.apiKey
-    )
+    # 调用 service 层处理业务逻辑（并发受限，超出上限直接返回「服务器忙」）
+    with concurrency.limit():
+        texts, timelines, char_timelines = service.align_text_with_audio(
+            audio_url=request.audio_url,
+            text=request.text,
+            max_chars_per_line=request.max_chars_per_line,
+            api_key=request.apiKey
+        )
     
     # 转换句子级时间线格式（确保为整数）
     timeline_items = [
