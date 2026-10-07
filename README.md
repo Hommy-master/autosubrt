@@ -45,6 +45,10 @@ uv sync
 ```
 uv run main.py
 ```
+3. 运行测试
+```
+uv run pytest tests -q
+```
 
 > 首次启动会自动下载语音识别模型（默认 `large-v3`，约 3GB）和标点模型（ct-punc，约 295MB）到模型目录，
 > 需要联网；下载完成后会缓存到 `MODEL_DIR`，后续启动直接复用。
@@ -56,7 +60,7 @@ uv run main.py
 | --- | --- | --- |
 | POST | `/openapi/autosubrt/v1/asr` | 语音 -> 完整文案 + 分句及逐字时间线 |
 | POST | `/openapi/autosubrt/v1/asr/text` | 语音 -> 纯文本（自带标点） |
-| POST | `/openapi/autosubrt/v1/asr/srt` | 语音 -> SRT 字幕文件 |
+| POST | `/openapi/autosubrt/v1/asr/srt` | 语音 -> SRT 字幕文件（**直接返回文件本体**，见 4.3） |
 | POST | `/openapi/autosubrt/v1/asr/text/align` | 语音 + 文本 -> 对齐后的字幕时间线、字级时间线 |
 | GET | `/openapi/autosubrt/v1/health` | 健康检查 |
 
@@ -141,13 +145,39 @@ uv run main.py
 - **不区分重试**：同一段音频重复调用会重复扣费，客户端请勿在超时后盲目重试。
 - **`ENABLE_APIKEY` 只认 `true`**：写成 `ENABLE_APIKEY=1` 会被当成 `false` 从而**关闭计费**，服务启动日志里会打印生效值，请留意。
 
+## 4.3 `POST /openapi/autosubrt/v1/asr/srt` 的返回形式
+
+请求体同其它接口，但**响应不再是一个 JSON 里的下载链接，而是 SRT 文件本体**（服务端不落盘，
+不产生任何需要清理的静态文件），调用方按文件保存即可：
+
+```
+HTTP/1.1 200 OK
+Content-Type: application/x-subrip; charset=utf-8
+Content-Disposition: attachment; filename="subtitle.srt"
+
+1
+00:00:02,810 --> 00:00:03,330
+多谢
+...
+```
+
+说明：
+
+- 文件内容为 **UTF-8 编码的 SRT**，行尾为 `\n`。
+- **失败时仍返回统一的 JSON 错误体**（`{code, message}`，HTTP 200），因此调用方需要按
+  `Content-Type` 区分：`application/x-subrip` 是字幕文件，`application/json` 是错误。
+- 该改动是**破坏性变更**：旧版本返回 `data.srt_url`（一个静态文件链接），消费方需同步调整。
+- 单次请求的音频临时文件仍在请求结束时删除，与之前的其它接口一致。
+
 # 5. 环境变量
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DOWNLOAD_URL` | `https://autosubrt.jcaigc.cn/` | 容器内文件路径转下载链接，本质是把 `/app/` 替换成该值 |
 | `FILE_SIZE_LIMIT` | `104857600` | 下载文件大小限制（字节），默认 100MB |
 | `MODEL_DIR` | 项目下的 `models` 目录 | 语音识别模型目录，首次启动自动下载到此处 |
+| `TEMP_CLEAN_ON_START` | `true` | 启动时清空临时目录，回收上次进程被强杀时残留的音频文件；仅当临时目录为进程私有（单进程、未挂载）时可开启，详见 7.5 |
+| `TEMP_RETENTION_SECONDS` | `21600` | 兜底清理：删除临时目录中超过该时长（秒）未更新的文件；`0` 表示关闭 |
+| `CLEANUP_INTERVAL_SECONDS` | `1800` | 后台清理任务的执行间隔（秒）；`0` 表示不启动该任务 |
 | `HF_ENDPOINT` | `https://hf-mirror.com` | 模型下载源；海外部署可改为 `https://huggingface.co` |
 | `HF_HUB_DISABLE_XET` | 非官方源为 `1`，官方源为 `0` | 是否启用 Xet 传输协议。Xet 不受 `HF_ENDPOINT` 影响，块数据要直连 `cas-server.xethub.hf.co`，用镜像时会被拒（401）导致大文件下载失败，因此非官方源下自动关闭 |
 | `ASR_MODEL` | `large-v3` | 模型：`large-v3` / `large-v3-turbo` / `medium` / `small`，也可填本地模型路径 |
@@ -198,3 +228,22 @@ uv run main.py
 ## 7.4 多进程
 `Dockerfile` 的启动命令里 `--workers 4` 目前不会被 `main.py` 解析（等价于单进程）。
 如果需要多进程提升吞吐，请注意每个进程都会各自加载一份模型，内存成倍增长。
+
+## 7.5 磁盘清理
+服务只在请求处理期间把音频下载到 `TEMP_DIR`（`temp/` 目录），并在请求结束时（含各种失败路径）删除。
+但进程被强杀时 `finally` 不会执行，文件会留在磁盘上再无引用，因此还有两道兜底：
+
+| 时机 | 行为 |
+| --- | --- |
+| 启动时 | `TEMP_CLEAN_ON_START=true` 时清空整个 `temp/` 目录（此时没有请求在跑，残留一定是上一个进程的） |
+| 运行期 | 每 `CLEANUP_INTERVAL_SECONDS` 清理一次，删除 `temp/` 中超过 `TEMP_RETENTION_SECONDS` 没有更新的文件 |
+
+说明：
+
+- 正在下载的文件每收到一个分片就会刷新 mtime，清理阈值又远大于单个请求的文件存活时长，
+  因此**不会误删正在处理的请求**；清理只针对普通文件，不递归子目录、不动符号链接。
+- **`temp/` 必须是进程私有目录**：如果将来启用多 worker，或把 `TEMP_DIR` 挂载到多个容器共享的卷，
+  每个进程启动时都会删掉别人在途的文件，此时必须设置 `TEMP_CLEAN_ON_START=false`（周期清理可以保留）。
+- `docker-compose.yaml` 里容器日志也做了轮转（`max-size=10m, max-file=3`），避免 json-file 日志无限增长。
+- `temp/` 位于容器可写层（未挂载到宿主机），服务不再往宿主机写任何文件；compose 中原先挂载站点
+  `output` 目录的配置已随之移除，宿主机上历史遗留的 SRT 文件不再被覆盖，可自行清理。

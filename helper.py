@@ -802,19 +802,70 @@ def _calculate_retry_delay(attempt: int, error_category: str, consecutive_failur
     final_delay = min(int(base_delay * multiplier), MAX_RETRY_DELAY)
     return max(final_delay, 1)  # 最少等待1秒
 
-def _safe_remove_file(file_path: str) -> None:
+def _safe_remove_file(file_path: str) -> bool:
     """
     安全删除文件，忽略删除错误
-    
+
     Args:
         file_path: 要删除的文件路径
+
+    Returns:
+        bool: 是否真的删除了文件
     """
     try:
         if os.path.exists(file_path):
             os.remove(file_path)
             logger.debug(f"Successfully removed file: {file_path}")
+            return True
     except Exception as e:
         logger.warning(f"Failed to remove file {file_path}: {e}")
+    return False
+
+def cleanup_dir(dir_path: str, max_age_seconds: float = 0) -> tuple[int, int]:
+    """
+    清理目录中遗留的文件（不递归、不跟随符号链接）
+
+    只删除普通文件，子目录、符号链接与点开头的文件一律不动；目录不存在视为无需清理。
+
+    Args:
+        dir_path: 待清理的目录
+        max_age_seconds: 只删除最后修改时间早于该时长（秒）的文件，0 表示不限制（全部清理）
+
+    Returns:
+        tuple[int, int]: (删除的文件数, 释放的字节数)
+    """
+    if not os.path.isdir(dir_path):
+        return 0, 0
+
+    deadline = time.time() - max_age_seconds
+    removed = 0
+    freed_bytes = 0
+
+    with os.scandir(dir_path) as entries:
+        for entry in entries:
+            try:
+                # 子目录、符号链接（删除链接本身也无法回收目标空间）、隐藏文件都不处理
+                if not entry.is_file(follow_symlinks=False) or entry.name.startswith("."):
+                    continue
+                # 下载中的文件每收到一个分片就会刷新 mtime，因此“还年轻”即视为在途，放过
+                stat = entry.stat(follow_symlinks=False)
+                if stat.st_mtime > deadline:
+                    continue
+                if _safe_remove_file(entry.path):
+                    removed += 1
+                    freed_bytes += stat.st_size
+            except FileNotFoundError:
+                # 请求自己的 finally 刚好删掉了，属正常情况
+                continue
+            except Exception as e:
+                logger.warning(f"Failed to clean up {entry.path}: {e}")
+
+    if removed:
+        logger.info(
+            f"Cleanup {dir_path}: removed {removed} file(s), "
+            f"freed {freed_bytes / 1024 / 1024:.2f}MB, max_age: {max_age_seconds}s"
+        )
+    return removed, freed_bytes
 
 def _validate_download_integrity_with_resume(
     response: requests.Response, 

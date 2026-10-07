@@ -7,6 +7,7 @@ import pysrt
 import config
 import asr
 import punctuation
+import io
 import os
 import re
 
@@ -267,7 +268,7 @@ def asr_srt(audio_url: str, api_key: str = None) -> str:
         api_key: API密钥，用于计费
 
     Returns:
-        srt_url: 字幕URL
+        srt_text: 字幕内容（SRT 文本），由接口直接以文件形式返回给调用方
 
     Raises:
         CustomException: 自定义异常
@@ -280,41 +281,15 @@ def asr_srt(audio_url: str, api_key: str = None) -> str:
         # 1. 下载音频文件
         audio_file = helper.download(audio_url, config.TEMP_DIR)
 
-        # 2. 生成srt文件名
-        srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
+        # 2. 执行音频转srt内容（不落盘，避免磁盘随请求量持续增长）
+        srt_text, duration = process_audio_to_srt(audio_file)
+        logger.info(f"Process audio to srt success, srt length: {len(srt_text)}")
 
-        # 3. 执行音频转srt格式文件
-        duration = process_audio_to_srt(audio_file, srt_file)
-        logger.info(f"Process audio to srt success, srt_file: {srt_file}")
-
-        # 4. 生成下载路径
-        srt_url = gen_download_url(srt_file)
-
-        # 5. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
+        # 3. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
         billing.charge(api_key, duration)
-        return srt_url
+        return srt_text
     finally:
-        # 清理临时音频文件
-        if audio_file and os.path.exists(audio_file):
-            try:
-                os.remove(audio_file)
-                logger.info(f"Temporary audio file cleaned up: {audio_file}")
-            except Exception as e:
-                logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
-
-def gen_download_url(file_path: str) -> str:
-    """
-    生成下载URL，将文件路径中的/app/替换成DOWNLOAD_URL
-    
-    Args:
-        file_path: 文件路径
-    
-    Returns:
-        download_url: 下载URL
-    """
-    # 替换文件路径中的/app/为DOWNLOAD_URL
-    download_url = file_path.replace("/app/", config.DOWNLOAD_URL)
-    return download_url
+        _cleanup_audio_file(audio_file)
 
 def ms_to_subrip_time(ms):
     """将毫秒转换为pysrt.SubRipTime对象"""
@@ -415,11 +390,11 @@ def create_srt_entries(words, timestamps):
     logger.info(f"Create {len(sentences)} SRT entries")
     return subs
 
-def process_audio_to_srt(audio_path: str, srt_path: str) -> float:
-    """处理音频文件并生成SRT字幕
+def process_audio_to_srt(audio_path: str) -> tuple[str, float]:
+    """处理音频文件并生成SRT字幕内容
 
     Returns:
-        float: 音频时长（秒），供计费使用
+        tuple[str, float]: (SRT 文本, 音频时长秒数——供计费使用)
     """
     try:
         # 1. 使用模型生成识别结果
@@ -428,11 +403,11 @@ def process_audio_to_srt(audio_path: str, srt_path: str) -> float:
         # 2. 创建SRT条目（chars 与 timestamps 一一对应）
         subs = create_srt_entries(result.chars, result.timestamps)
 
-        # 3. 保存SRT文件
-        subs.save(srt_path)
-        logger.info(f"SRT file saved: {srt_path}")
+        # 3. 序列化成文本；与 Subs.save() 同源（save 内部就是 write_into），内容完全一致
+        buffer = io.StringIO()
+        subs.write_into(buffer)
 
-        return result.duration
+        return buffer.getvalue(), result.duration
 
     except CustomException:
         # 自定义异常直接抛出

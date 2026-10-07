@@ -56,10 +56,6 @@ class AsrSrtRequest(ApiKeyMixin):
     """语音 -> 字幕请求参数"""
     audio_url: HttpUrl = Field(..., description="音频文件URL")
 
-class AsrSrtResponse(BaseModel):
-    """语音 -> 字幕响应参数"""
-    srt_url: str = Field(default="", description="字幕文件URL")
-
 class AsrTextAlignRequest(ApiKeyMixin):
     """语音 -> 对齐字幕时间线请求参数"""
     audio_url: str = Field(..., description="音频文件URL")

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import router
 import asr
+import cleanup
 import config
 import punctuation
 import middlewares
@@ -21,6 +22,8 @@ async def lifespan(app: FastAPI):
         config.ENABLE_APIKEY,
         config.POINTS_PER_SECOND,
     )
+    # 先清理上次被强杀时残留的临时文件，再去加载模型，避免磁盘被残留文件占满
+    await cleanup.start()
     # 在应用启动时加载模型
     asr.load_model()
     punctuation.load_model()
@@ -28,6 +31,7 @@ async def lifespan(app: FastAPI):
     # ---------------- 关闭 ----------------
     # await close_db_pool()
     # await stop_redis()
+    await cleanup.stop()
     logger.info("❌ app shutdown")
 
 # 2. 创建FastAPI应用

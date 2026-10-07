@@ -4,12 +4,8 @@ import os
 
 # 临时目录，用在缓存临时文件
 TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp")
-SRT_OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output", "srt")
 # 语音识别模型目录，首次启动会自动下载模型到此处
 MODEL_DIR = os.getenv("MODEL_DIR", os.path.join(os.path.dirname(__file__), "models"))
-
-# 将容器内的文件路径转成一个下载路径，执行替换操作，即将/app/ -> https://autosubrt.jcaigc.cn/
-DOWNLOAD_URL = os.getenv("DOWNLOAD_URL", "https://autosubrt.jcaigc.cn/")
 
 # 文件大小限制，默认为100MB (100 * 1024 * 1024 字节)
 FILE_SIZE_LIMIT = int(os.getenv("FILE_SIZE_LIMIT", str(100 * 1024 * 1024)))
@@ -60,6 +56,20 @@ PUNCT_MODEL = os.getenv(
 PUNCT_MODEL_FILE = os.getenv("PUNCT_MODEL_FILE", "model.onnx")
 # ONNX 推理线程数，0 表示自动（容器内按 cgroup 的 CPU 配额）
 PUNCT_CPU_THREADS = int(os.getenv("PUNCT_CPU_THREADS", "0"))
+
+# ===== 磁盘清理配置 =====
+
+# 正常情况下临时音频文件会在请求结束时删除，只有进程被强杀（OOM、重新部署）时才会残留。
+# 残留文件再无任何引用，且年龄可能只有几分钟，因此启动时直接清空 temp 目录。
+# 前提是 TEMP_DIR 为进程私有（当前单进程运行，且该目录不挂载到宿主机）；
+# 若将来启用多 worker 或把该目录挂到共享卷，必须置为 false，否则会删掉其它进程在途的文件。
+TEMP_CLEAN_ON_START = os.getenv("TEMP_CLEAN_ON_START", "true").strip().lower() == "true"
+# 兜底清理：删除 temp 目录中超过该时长（秒）没有更新的文件。该值需远大于单个请求的
+# 文件存活时长（下载超时 90s × 重试 + 音频解码），且下载中的文件 mtime 会被持续刷新，
+# 因此不会误删在途文件；<= 0 表示关闭周期清理
+TEMP_RETENTION_SECONDS = int(os.getenv("TEMP_RETENTION_SECONDS", str(6 * 3600)))
+# 周期清理的执行间隔（秒），<= 0 表示不启动后台清理任务
+CLEANUP_INTERVAL_SECONDS = int(os.getenv("CLEANUP_INTERVAL_SECONDS", str(30 * 60)))
 
 # ===== 计费（积分）配置 =====
 

@@ -1,7 +1,13 @@
 from fastapi import APIRouter
+from fastapi.responses import Response
 from logger import logger
 import schemas
 import service
+
+
+# SRT 文件下载响应：调用方直接拿到字幕文件本体，服务端不落盘
+SRT_MEDIA_TYPE = "application/x-subrip"
+SRT_DOWNLOAD_FILENAME = "subtitle.srt"
 
 
 router = APIRouter(prefix="/v1", tags=["v1"])
@@ -34,19 +40,28 @@ def asr_text(asr: schemas.AsrTextRequest):
 
     return schemas.AsrTextResponse(text=text)
 
-@router.post("/asr/srt", response_model=schemas.AsrSrtResponse)
+@router.post("/asr/srt")
 def asr_srt(asr: schemas.AsrSrtRequest):
     """
     语音 -> 字幕
+
+    直接返回 SRT 文件本体（Content-Disposition: attachment），服务端不保存文件；
+    失败时仍由 ResponseMiddleware 返回统一的 JSON 错误体，调用方按 Content-Type 区分。
     """
 
-    srt_url = service.asr_srt(
+    srt_text = service.asr_srt(
         audio_url=asr.audio_url,
         api_key=asr.apiKey,
     )
 
-    logger.info(f"generate srt: {srt_url}")
-    return schemas.AsrSrtResponse(srt_url=srt_url)
+    logger.info(f"generate srt success, length: {len(srt_text)}")
+    return Response(
+        content=srt_text.encode("utf-8"),
+        media_type=f"{SRT_MEDIA_TYPE}; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{SRT_DOWNLOAD_FILENAME}"',
+        },
+    )
 
 @router.post("/asr/text/align", response_model=schemas.AsrTextAlignResponse)
 def asr_text_align(request: schemas.AsrTextAlignRequest):

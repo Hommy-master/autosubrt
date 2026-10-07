@@ -5,13 +5,11 @@ services:
     ports:
       - "30001:30000"
     volumes:
-      - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/output:/app/output  # 挂载配置文件目录
+      # SRT 改为接口直传后容器不再写文件，原先挂载站点 output 目录的配置已移除
       - /opt/1panel/apps/openresty/openresty/www/sites/autosubrt.jcaigc.cn/index/models/asr_models:/app/models  # 挂载语音识别模型数据
       - /etc/localtime:/etc/localtime:ro  # 挂载主机时区
       - /etc/timezone:/etc/timezone:ro    # 挂载时区名称（可选）
     environment:
-      # 用于将容器内部的文件路径转成URL，本质是将/app/替换成DOWNLOAD_URL得到下载路径
-      - DOWNLOAD_URL=https://autosubrt.jcaigc.cn/
       # 语音识别模型目录，首次启动会自动下载模型到此处
       - MODEL_DIR=/app/models
       # HuggingFace 模型下载源，默认使用国内镜像；海外部署可改为 https://huggingface.co
@@ -40,6 +38,13 @@ services:
       - ENABLE_APIKEY=true
       # 计费单价（积分/秒），默认 0.00022
       - POINTS_PER_SECOND=0.00022
+      # 启动时清空 temp 目录：回收上次进程被强杀（OOM、重新部署）时残留的音频文件。
+      # 前提是 temp 目录为进程私有（当前单进程运行、且未挂载）；多 worker 或把 temp 挂到共享卷时必须设为 false
+      - TEMP_CLEAN_ON_START=true
+      # 兜底清理：删除 temp 目录中超过该时长（秒）没有更新的文件，默认 6 小时，0 表示关闭
+      - TEMP_RETENTION_SECONDS=21600
+      # 周期清理的执行间隔（秒），默认 30 分钟，0 表示不启动后台清理任务
+      - CLEANUP_INTERVAL_SECONDS=1800
     mem_limit: 8G     # 内存限制
     memswap_limit: 8G # 总内存（物理内存 + Swap）限制
     cpus: '3.5'       # CPU使用率限制为150%，即容器最多可以使用1.5个完整的CPU核心
