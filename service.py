@@ -10,15 +10,16 @@ import punctuation
 import io
 import os
 import re
+import unicodedata
 
 
-# 断句标点：只作为分句边界，不进入 utterance 文本
-# 与 split_text_by_punctuation_without_symbols 的分隔符保持一致（chars 不含空白字符，故无需 \n\r）
+# 全部标点：与逐字时间线对齐时用来识别标点（标点没有时间戳），不含空白字符
 # 复用标点恢复模块的标点表，保证「分句结果拼回去」与「带标点的完整文案」始终对得上
-SENTENCE_PUNCTUATIONS = punctuation.PUNCTUATIONS
+PUNCTUATIONS = punctuation.PUNCTUATIONS
 
-# 标点缺失时，用超过该阈值（毫秒）的静音兜底断句
-UTTERANCE_SILENCE_MS = 500
+# 句末标点：分句的唯一依据。逗号、顿号等句内标点不断句，留在句子内部，
+# 保证 utterances 里每一条都是一句以句末标点（。！？.!?）收尾的完整句子
+SENTENCE_END_PUNCTUATIONS = punctuation.SENTENCE_END_PUNCTUATIONS
 
 def asr_text(audio_url: str, api_key: str = None) -> str:
     """
@@ -117,11 +118,10 @@ def asr_utterances(audio_url: str, api_key: str = None) -> tuple[str, list[dict]
         _cleanup_audio_file(audio_file)
 
 def split_utterances(words, timestamps, punctuated: str = "") -> list[dict]:
-    """把逐字时间线切分成一句话/一段话
+    """把逐字时间线按句末标点切分成一句一句
 
-    切分规则：
-    1. 优先按标点断句，标点跟随所属句子，因此各句拼接起来与 punctuated 完全一致；
-    2. 标点之间隔得过远时，用超过 UTTERANCE_SILENCE_MS 的静音兜底断句。
+    切分规则：只有句末标点（。！？!?）才结束一句话，逗号、顿号等句内标点不断句。
+    标点跟随所属句子，因此每句都以句末标点收尾，且各句拼接起来与 punctuated 完全一致。
 
     Args:
         words: 逐字序列，与 timestamps 一一对应
@@ -137,16 +137,17 @@ def split_utterances(words, timestamps, punctuated: str = "") -> list[dict]:
     utterances = []
     texts = []
     sentence_words = []
+    # 上一个字（含上一句）的结束时间；时间戳缺失时用它兜底，跨句保留，避免句中冒出一个 0 时间
     last_end = None
 
     for char, start, end, is_punct in sequence:
-        # 标点：结束当前句子，标点本身留在句子里
+        # 标点：句末标点结束当前句子，句内标点继续累积；标点本身都留在句子里
         if is_punct:
             texts.append(char)
             # 句首的标点（异常输入）不单独成句，继续累积到下一句
-            if sentence_words:
+            if char in SENTENCE_END_PUNCTUATIONS and sentence_words:
                 utterances.append(_build_utterance(texts, sentence_words))
-                texts, sentence_words, last_end = [], [], None
+                texts, sentence_words = [], []
             continue
 
         # 空白：只属于句子文本（英文单词之间），没有时间线
@@ -154,13 +155,7 @@ def split_utterances(words, timestamps, punctuated: str = "") -> list[dict]:
             texts.append(char)
             continue
 
-        # 静音兜底：与上一个字的间隔过大时断句
-        if sentence_words and start is not None and last_end is not None \
-                and start - last_end > UTTERANCE_SILENCE_MS:
-            utterances.append(_build_utterance(texts, sentence_words))
-            texts, sentence_words, last_end = [], [], None
-
-        # 时间戳缺失时退化为相邻字的结束时间，保证不丢字
+        # 时间戳缺失时退化为上一个字的结束时间，保证不丢字
         fallback = last_end if last_end is not None else 0
         start_time = fallback if start is None else start
         end_time = start_time if end is None else end
@@ -202,7 +197,7 @@ def _align_sequence(words, timestamps, punctuated: str) -> list[tuple]:
     """
     real = []
     for index, char in enumerate(words):
-        if char in SENTENCE_PUNCTUATIONS:
+        if char in PUNCTUATIONS:
             continue
         timestamp = timestamps[index] if index < len(timestamps) else None
         real.append((
@@ -219,11 +214,17 @@ def _align_sequence(words, timestamps, punctuated: str) -> list[tuple]:
             sequence.append((char, None, None, False))
             continue
 
-        if char in SENTENCE_PUNCTUATIONS:
+        if char in PUNCTUATIONS:
             sequence.append((char, None, None, True))
             continue
 
         if cursor >= len(real) or real[cursor][0] != char:
+            # 文案里多出识别结果没有的标点（例如标点模型输出了 PUNCTUATIONS 之外的标点）：
+            # 按标点处理，不给时间戳也不断句，避免整段退回无标点序列
+            if _is_punctuation(char):
+                sequence.append((char, None, None, True))
+                continue
+
             # 理论上不会发生；真出现错位时退回识别结果本身，宁可少标点也不能串字
             logger.warning("punctuated text mismatch, fall back to raw asr chars")
             return _raw_sequence(words, timestamps)
@@ -236,6 +237,19 @@ def _align_sequence(words, timestamps, punctuated: str) -> list[tuple]:
         return _raw_sequence(words, timestamps)
 
     return sequence
+
+def _is_punctuation(char: str) -> bool:
+    """判断字符是否属于 Unicode 标点
+
+    不依赖具体标点表，兜住标点模型可能插入的其它标点（如引号、省略号）。
+
+    Args:
+        char: 单个字符
+
+    Returns:
+        bool: 是标点返回 True
+    """
+    return unicodedata.category(char).startswith("P")
 
 def _raw_sequence(words, timestamps) -> list[tuple]:
     """直接用识别结果构造待切分序列
@@ -254,7 +268,7 @@ def _raw_sequence(words, timestamps) -> list[tuple]:
             char,
             timestamp[0] if timestamp else None,
             timestamp[1] if timestamp else None,
-            char in SENTENCE_PUNCTUATIONS,
+            char in PUNCTUATIONS,
         ))
 
     return sequence

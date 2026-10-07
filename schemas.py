@@ -92,8 +92,8 @@ class AsrWordItem(BaseModel):
     end_time: int = Field(..., description="结束时间 (毫秒)")
 
 class AsrUtteranceItem(BaseModel):
-    """一句话/一段话"""
-    text: str = Field(default="", description="一句话或一段话的文本")
+    """一句话：以句末标点（。！？.!?）收尾的完整句子"""
+    text: str = Field(default="", description="一句话的文本，以句末标点收尾")
     words: list[AsrWordItem] = Field(default=[], description="该句话中每个字的时间线")
 
 class AsrRequest(ApiKeyMixin):
