@@ -60,3 +60,12 @@ PUNCT_MODEL = os.getenv(
 PUNCT_MODEL_FILE = os.getenv("PUNCT_MODEL_FILE", "model.onnx")
 # ONNX 推理线程数，0 表示自动（容器内按 cgroup 的 CPU 配额）
 PUNCT_CPU_THREADS = int(os.getenv("PUNCT_CPU_THREADS", "0"))
+
+# ===== 计费（积分）配置 =====
+
+# 是否启用 apiKey 校验与计费：开启后所有 ASR 接口必须传 apiKey 并按音频时长扣费；
+# 关闭则接口无需 apiKey、不扣费（行为与计费功能上线前一致）
+# 注意：只认 "true"，写 ENABLE_APIKEY=1 会被当成 false（与 capcut-mate 保持一致）
+ENABLE_APIKEY = os.getenv("ENABLE_APIKEY", "true").strip().lower() == "true"
+# 计费单价：积分/秒
+POINTS_PER_SECOND = float(os.getenv("POINTS_PER_SECOND", "0.00022"))

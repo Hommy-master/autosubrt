@@ -2,6 +2,7 @@ from logger import logger
 from exceptions import CustomException, CustomError
 import traceback
 import helper
+import billing
 import pysrt
 import config
 import asr
@@ -18,12 +19,13 @@ SENTENCE_PUNCTUATIONS = punctuation.PUNCTUATIONS
 # 标点缺失时，用超过该阈值（毫秒）的静音兜底断句
 UTTERANCE_SILENCE_MS = 500
 
-def asr_text(audio_url: str) -> str:
+def asr_text(audio_url: str, api_key: str = None) -> str:
     """
     语音 -> 纯文本
 
     Args:
         audio_url: 音频URL
+        api_key: API密钥，用于计费
 
     Returns:
         text: 纯文本
@@ -31,6 +33,9 @@ def asr_text(audio_url: str) -> str:
     Raises:
         CustomException: 自定义异常
     """
+    # 计费校验放在最前面，不合格的调用方不做无谓的下载与识别
+    billing.check_api_key(api_key)
+
     audio_file = None
     try:
         # 1. 下载音频文件
@@ -42,6 +47,9 @@ def asr_text(audio_url: str) -> str:
         # 3. 补标点（whisper 对中文标点不可靠，统一由标点模型决定）
         text = punctuation.restore(result.text)
         logger.info(f"ASR text success, text length: {len(text)}")
+
+        # 4. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
+        billing.charge(api_key, result.duration)
         return text
 
     except CustomException:
@@ -59,12 +67,13 @@ def asr_text(audio_url: str) -> str:
             except Exception as e:
                 logger.error(f"Failed to remove temporary audio file {audio_file}: {str(e)}")
 
-def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
+def asr_utterances(audio_url: str, api_key: str = None) -> tuple[str, list[dict]]:
     """
     语音 -> 完整文案 + 分句及逐字时间线
 
     Args:
         audio_url: 音频URL
+        api_key: API密钥，用于计费
 
     Returns:
         tuple: (完整文案, utterances 列表)
@@ -72,6 +81,9 @@ def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
     Raises:
         CustomException: 自定义异常
     """
+    # 计费校验放在最前面，不合格的调用方不做无谓的下载与识别
+    billing.check_api_key(api_key)
+
     audio_file = None
     try:
         # 1. 下载音频文件
@@ -90,6 +102,8 @@ def asr_utterances(audio_url: str) -> tuple[str, list[dict]]:
             f"utterances count: {len(utterances)}"
         )
 
+        # 5. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
+        billing.charge(api_key, result.duration)
         return text, utterances
 
     except CustomException:
@@ -244,19 +258,23 @@ def _raw_sequence(words, timestamps) -> list[tuple]:
 
     return sequence
 
-def asr_srt(audio_url: str) -> str:
+def asr_srt(audio_url: str, api_key: str = None) -> str:
     """
     语音 -> 字幕（提取视频文案）
-    
+
     Args:
         audio_url: 音频URL
-    
+        api_key: API密钥，用于计费
+
     Returns:
         srt_url: 字幕URL
 
     Raises:
         CustomException: 自定义异常
     """
+    # 计费校验放在最前面，不合格的调用方不做无谓的下载与识别
+    billing.check_api_key(api_key)
+
     audio_file = None
     try:
         # 1. 下载音频文件
@@ -266,11 +284,15 @@ def asr_srt(audio_url: str) -> str:
         srt_file = os.path.join(config.SRT_OUTPUT_DIR, helper.gen_unique_id() + ".srt")
 
         # 3. 执行音频转srt格式文件
-        process_audio_to_srt(audio_file, srt_file)
+        duration = process_audio_to_srt(audio_file, srt_file)
         logger.info(f"Process audio to srt success, srt_file: {srt_file}")
 
         # 4. 生成下载路径
-        return gen_download_url(srt_file)
+        srt_url = gen_download_url(srt_file)
+
+        # 5. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
+        billing.charge(api_key, duration)
+        return srt_url
     finally:
         # 清理临时音频文件
         if audio_file and os.path.exists(audio_file):
@@ -393,8 +415,12 @@ def create_srt_entries(words, timestamps):
     logger.info(f"Create {len(sentences)} SRT entries")
     return subs
 
-def process_audio_to_srt(audio_path: str, srt_path: str):
-    """处理音频文件并生成SRT字幕"""
+def process_audio_to_srt(audio_path: str, srt_path: str) -> float:
+    """处理音频文件并生成SRT字幕
+
+    Returns:
+        float: 音频时长（秒），供计费使用
+    """
     try:
         # 1. 使用模型生成识别结果
         result = asr.transcribe(audio_path)
@@ -405,6 +431,8 @@ def process_audio_to_srt(audio_path: str, srt_path: str):
         # 3. 保存SRT文件
         subs.save(srt_path)
         logger.info(f"SRT file saved: {srt_path}")
+
+        return result.duration
 
     except CustomException:
         # 自定义异常直接抛出
@@ -431,37 +459,46 @@ def split_text_by_punctuation_without_symbols(text: str) -> list[str]:
     
     return result
 
-def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15) -> tuple[list[str], list[dict], list[dict]]:
+def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 15, api_key: str = None) -> tuple[list[str], list[dict], list[dict]]:
     """
     根据音频对齐文本时间线
-    
+
     Args:
         audio_url: 音频 URL
         text: 需要对齐的文本
         max_chars_per_line: 每行最大字数
-    
+        api_key: API密钥，用于计费
+
     Returns:
         tuple: (texts 列表 - 用户文本，timelines 列表 - 用户文本时间线，words 列表 - ASR 字符级时间线)
     """
+    # 计费校验放在最前面，不合格的调用方不做无谓的下载与识别
+    billing.check_api_key(api_key)
+
     audio_file = None
     try:
         # 1. 下载音频并获取 ASR 结果
-        asr_text, timestamps, audio_file = _get_asr_result(audio_url)
-        
+        asr_text, timestamps, audio_file, duration = _get_asr_result(audio_url)
+
+        # 音频已下载、ASR 已跑完，即使没识别出语音也要按实际时长计费
         if not asr_text or not timestamps:
+            logger.info(f"No speech recognized, duration: {duration:.2f}s")
+            billing.charge(api_key, duration)
             return [text], [{"start": 0, "end": 30000000}], []
-        
+
         # 2. 预处理用户文本
         user_sentences = split_text_by_punctuation_without_symbols(text)
-        
+
         # 3. 生成 ASR 字符级时间线（基于 ASR 识别的原始文本）
         words = _generate_asr_words(asr_text, timestamps)
-        
+
         # 4. 为用户文本生成时间线
         final_texts, timelines = _align_user_text(user_sentences, timestamps, max_chars_per_line)
-        
+
+        # 5. 识别成功后才扣费（charge 保证不抛异常，不会影响本次响应）
+        billing.charge(api_key, duration)
         return final_texts, timelines, words
-        
+
     except CustomException:
         raise
     except Exception as e:
@@ -470,10 +507,15 @@ def align_text_with_audio(audio_url: str, text: str, max_chars_per_line: int = 1
     finally:
         _cleanup_audio_file(audio_file)
 
-def _get_asr_result(audio_url: str) -> tuple[str, list[list], str]:
-    """下载音频并获取 ASR 识别结果，返回 (逐字文本, 时间戳, 临时音频路径)"""
+def _get_asr_result(audio_url: str) -> tuple[str, list[list], str, float]:
+    """下载音频并获取 ASR 识别结果，返回 (逐字文本, 时间戳, 临时音频路径, 音频时长秒数)"""
     audio_file = helper.download(audio_url, config.TEMP_DIR)
-    result = asr.transcribe(audio_file)
+    try:
+        result = asr.transcribe(audio_file)
+    except Exception:
+        # 识别失败时调用方拿不到 audio_file，无法在其 finally 中清理，这里先删掉避免临时文件泄漏
+        _cleanup_audio_file(audio_file)
+        raise
 
     # text_plain 与 timestamps 一一对应，保证后续字级对齐的插值精度
     asr_text, timestamps = result.text_plain, result.timestamps
@@ -481,7 +523,7 @@ def _get_asr_result(audio_url: str) -> tuple[str, list[list], str]:
     if asr_text and timestamps:
         logger.info(f"ASR recognized text length: {len(asr_text)}, timestamps count: {len(timestamps)}")
 
-    return asr_text, timestamps, audio_file
+    return asr_text, timestamps, audio_file, result.duration
 
 def _generate_asr_words(asr_text: str, timestamps: list[list]) -> list[dict]:
     """

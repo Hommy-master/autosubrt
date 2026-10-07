@@ -14,6 +14,11 @@ class CustomError(Enum):
     DOWNLOAD_FILE_FAILED = (2003, "下载文件失败", "Download file failed")
     DOWNLOAD_FILE_TIMEOUT = (2005, "下载文件超时", "Download file timeout")
 
+    # ===== 计费错误码 =====
+    # 与 capcut-mate 保持同一组数字码（2035/2036），便于客户端用一张表识别各服务的计费错误
+    INSUFFICIENT_ACCOUNT_BALANCE = (2035, "账户余额不足，当前积分需大于 1 才可继续使用服务，请完成充值后重试", "Insufficient account balance. A minimum of 1 point is required to continue using the service. Please recharge and try again.")
+    INVALID_APIKEY = (2036, "无效的 apiKey，请登录官网 https://jcaigc.cn 获取", "Invalid apiKey. Please log in at https://jcaigc.cn to obtain one")
+
     # ===== 系统错误码 (9000-9999) =====
     INTERNAL_SERVER_ERROR = (9998, "系统内部错误", "Internal server error")
     UNKNOWN_ERROR = (9999, "未知异常", "Unknown error")

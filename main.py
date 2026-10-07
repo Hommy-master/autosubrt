@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 import router
 import asr
+import config
 import punctuation
 import middlewares
 from logger import logger
@@ -14,6 +15,12 @@ async def lifespan(app: FastAPI):
     # await create_db_pool()
     # await start_redis()
     logger.info("✅ app start")
+    # 计费开关只认 "true"，这里显式打出生效值，避免误写成 ENABLE_APIKEY=1 时计费被静默关闭
+    logger.info(
+        "Billing: ENABLE_APIKEY=%s, POINTS_PER_SECOND=%s",
+        config.ENABLE_APIKEY,
+        config.POINTS_PER_SECOND,
+    )
     # 在应用启动时加载模型
     asr.load_model()
     punctuation.load_model()

@@ -2,7 +2,10 @@
 实现语音转SRT格式字幕，提供HTTP接口；推荐使用python3.11运行。
 
 语音识别引擎使用 [faster-whisper](https://github.com/SYSTRAN/faster-whisper)（CTranslate2 推理），
-替代原有的 FunASR（paraformer-zh + ct-punc），接口的入参、出参和返回结构完全不变。
+替代原有的 FunASR（paraformer-zh + ct-punc），识别结果的结构不变。
+
+> **计费**：所有 ASR 接口需要传入 `apiKey` 并按音频时长扣费，详见 [4.2 计费](#42-计费)。
+> 升级时若不希望开启，设置环境变量 `ENABLE_APIKEY=false` 即可恢复为无校验、不扣费的行为。
 
 标点由独立的 [ct-punc](https://modelscope.cn/models/iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch)
 （CT-Transformer，ONNX 推理）恢复：whisper 对中文标点不可靠，短音频可能整段没有标点，
@@ -57,12 +60,18 @@ uv run main.py
 | POST | `/openapi/autosubrt/v1/asr/text/align` | 语音 + 文本 -> 对齐后的字幕时间线、字级时间线 |
 | GET | `/openapi/autosubrt/v1/health` | 健康检查 |
 
+所有 ASR 接口的请求体都可以带一个可选的 `apiKey` 字段（开启计费时必填），例如：
+
+```json
+{ "audio_url": "http://example.com/audio.wav", "apiKey": "3f2504e0-4f89-11d3-9a0c-0305e82c3301" }
+```
+
 ## 4.1 `POST /openapi/autosubrt/v1/asr`
 
 请求：
 
 ```json
-{ "audio_url": "http://example.com/audio.wav" }
+{ "audio_url": "http://example.com/audio.wav", "apiKey": "3f2504e0-4f89-11d3-9a0c-0305e82c3301" }
 ```
 
 响应（时间为毫秒）：
@@ -95,6 +104,43 @@ uv run main.py
 - 由静音兜底断出的句子可能没有结尾标点，因为该处标点模型本就没有给出标点；此时**不会**人为补标点，以保证上一条的拼接一致性。
 - 响应外层 `{code, message, data}` 为全局统一封装，与其它接口一致。
 
+## 4.2 计费
+
+开启后（默认开启）所有 ASR 接口都要传 `apiKey`，并按音频时长扣费，与兄弟服务 capcut-mate 共用同一套积分体系。
+
+| 项 | 说明 |
+| --- | --- |
+| 单价 | **0.00022 积分/秒** |
+| 计费依据 | 音频实际时长（秒），由识别引擎给出 |
+| 扣费时机 | 识别**成功之后**才扣费；识别失败不扣费 |
+| 计费接口 | `/asr`、`/asr/text`、`/asr/srt`、`/asr/text/align`（`/health` 不计费） |
+| 余额门槛 | 调用前要求账户积分**大于 1**，否则直接拒绝 |
+
+费用 = 时长（秒）× 0.00022，保留 6 位小数，例如：
+
+| 音频时长 | 费用（积分） |
+| --- | --- |
+| 10 秒 | 0.002200 |
+| 60 秒 | 0.013200 |
+| 1 小时 | 0.792000 |
+
+`apiKey` 必须是合法 UUID，可登录官网 <https://jcaigc.cn> 获取。
+
+错误码：
+
+| 错误码 | 含义 |
+| --- | --- |
+| `1001` | apiKey 不是合法 UUID（参数校验失败） |
+| `2035` | 账户余额不足（调用前积分需大于 1） |
+| `2036` | 未传 apiKey |
+
+说明：
+
+- **apiKey 格式校验与 `ENABLE_APIKEY` 开关无关**：关闭计费时传入非法格式的 apiKey 依然会返回 `1001`。
+- **扣费失败不会让请求失败**：识别结果照常返回，扣费失败只记录日志（如积分服务临时不可用）。
+- **不区分重试**：同一段音频重复调用会重复扣费，客户端请勿在超时后盲目重试。
+- **`ENABLE_APIKEY` 只认 `true`**：写成 `ENABLE_APIKEY=1` 会被当成 `false` 从而**关闭计费**，服务启动日志里会打印生效值，请留意。
+
 # 5. 环境变量
 
 | 变量 | 默认值 | 说明 |
@@ -115,6 +161,8 @@ uv run main.py
 | `PUNCT_MODEL` | `csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12` | 标点模型：下载源上的仓库名，或本地模型目录；默认约 295MB |
 | `PUNCT_MODEL_FILE` | `model.onnx` | 标点模型文件名（本地目录里也按该名字查找） |
 | `PUNCT_CPU_THREADS` | `0` | 标点模型的 ONNX 推理线程数，`0` 表示自动（容器内按 cgroup 的 CPU 配额） |
+| `ENABLE_APIKEY` | `true` | 是否启用 apiKey 校验与计费；置 `false` 则无需 apiKey、不扣费。**只认 `true`/`false`**，写 `1` 会被当成 `false` |
+| `POINTS_PER_SECOND` | `0.00022` | 计费单价（积分/秒） |
 
 # 6. 标点恢复说明
 

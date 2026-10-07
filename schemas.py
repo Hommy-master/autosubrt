@@ -1,8 +1,50 @@
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 from typing import Optional
+import uuid
 
 
-class AsrTextRequest(BaseModel):
+def validate_api_key_uuid(value: Optional[str]) -> Optional[str]:
+    """
+    校验 apiKey 格式：空值归一为 None，非 UUID 时抛出 ValueError。
+
+    Args:
+        value: 请求传入的 apiKey
+
+    Returns:
+        Optional[str]: 归一化后的 apiKey
+
+    Raises:
+        ValueError: apiKey 不是合法 UUID
+    """
+    if value is None or value == "":
+        return None
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        raise ValueError(
+            "API密钥格式不正确，必须是合法的UUID；请登录官网 https://jcaigc.cn 获取 apiKey"
+        )
+    return value
+
+
+class ApiKeyMixin(BaseModel):
+    """带 apiKey 校验的请求参数基类
+
+    格式非法时 pydantic 抛 ValueError，FastAPI 返回 422，再由 ResponseMiddleware
+    统一转成 1001 参数校验失败。该校验不随 ENABLE_APIKEY 开关变化。
+    """
+    apiKey: Optional[str] = Field(
+        default=None,
+        description="apiKey 必须是合法的 UUID 格式；可登录官网 https://jcaigc.cn 获取",
+    )
+
+    @field_validator('apiKey')
+    @classmethod
+    def validate_api_key(cls, v):
+        return validate_api_key_uuid(v)
+
+
+class AsrTextRequest(ApiKeyMixin):
     """语音 -> 纯文本请求参数"""
     audio_url: str = Field(default="", description="音频文件URL")
 
@@ -10,7 +52,7 @@ class AsrTextResponse(BaseModel):
     """语音 -> 纯文本响应参数"""
     text: str = Field(default="", description="纯文本")
 
-class AsrSrtRequest(BaseModel):
+class AsrSrtRequest(ApiKeyMixin):
     """语音 -> 字幕请求参数"""
     audio_url: HttpUrl = Field(..., description="音频文件URL")
 
@@ -18,7 +60,7 @@ class AsrSrtResponse(BaseModel):
     """语音 -> 字幕响应参数"""
     srt_url: str = Field(default="", description="字幕文件URL")
 
-class AsrTextAlignRequest(BaseModel):
+class AsrTextAlignRequest(ApiKeyMixin):
     """语音 -> 对齐字幕时间线请求参数"""
     audio_url: str = Field(..., description="音频文件URL")
     text: str = Field(..., description="音频对应字幕文本")
@@ -58,7 +100,7 @@ class AsrUtteranceItem(BaseModel):
     text: str = Field(default="", description="一句话或一段话的文本")
     words: list[AsrWordItem] = Field(default=[], description="该句话中每个字的时间线")
 
-class AsrRequest(BaseModel):
+class AsrRequest(ApiKeyMixin):
     """语音 -> 完整文案及逐字时间线请求参数"""
     audio_url: str = Field(..., description="音频文件URL")
 

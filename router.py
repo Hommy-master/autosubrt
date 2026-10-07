@@ -13,7 +13,7 @@ def asr_utterances(request: schemas.AsrRequest):
     """
 
     # 调用service层处理业务逻辑
-    text, utterances = service.asr_utterances(audio_url=request.audio_url)
+    text, utterances = service.asr_utterances(audio_url=request.audio_url, api_key=request.apiKey)
 
     return schemas.AsrResponse(
         text=text,
@@ -29,6 +29,7 @@ def asr_text(asr: schemas.AsrTextRequest):
     # 调用service层处理业务逻辑
     text = service.asr_text(
         audio_url=asr.audio_url,
+        api_key=asr.apiKey,
     )
 
     return schemas.AsrTextResponse(text=text)
@@ -41,6 +42,7 @@ def asr_srt(asr: schemas.AsrSrtRequest):
 
     srt_url = service.asr_srt(
         audio_url=asr.audio_url,
+        api_key=asr.apiKey,
     )
 
     logger.info(f"generate srt: {srt_url}")
@@ -57,7 +59,8 @@ def asr_text_align(request: schemas.AsrTextAlignRequest):
     texts, timelines, char_timelines = service.align_text_with_audio(
         audio_url=request.audio_url,
         text=request.text,
-        max_chars_per_line=request.max_chars_per_line
+        max_chars_per_line=request.max_chars_per_line,
+        api_key=request.apiKey
     )
     
     # 转换句子级时间线格式（确保为整数）
